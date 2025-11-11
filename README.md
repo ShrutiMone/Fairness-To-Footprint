@@ -1,14 +1,14 @@
 # AI Fairness Audit System
 
-### Backend Setup
+### Backend Setup<br>
 
-cd backend
-python -m venv venv
-venv\Scripts\activate   # on Windows
-pip install -r requirements.txt
-python app.py
+cd backend<br>
+python -m venv venv<br>
+venv\Scripts\activate   # on Windows<br>
+pip install -r requirements.txt<br>
+python app.py<br>
 
-### Frontend Setup
-cd frontend
-npm install
-npm start
+### Frontend Setup<br>
+cd frontend<br>
+npm install<br>
+npm start<br>
