@@ -1,24 +1,15 @@
 import React from "react";
 
-const ProgressBar = ({ step }) => {
-  const stages = ["Inputs", "Processing", "Report"];
+const ProgressBar = ({ step=1 }) => {
+  const percent = step === 1 ? 33 : step === 2 ? 66 : 100;
+  const labels = ["Upload", "Processing", "Report"];
   return (
-    <div className="w-full bg-gray-200 h-3 rounded-full mt-4">
-      <div
-        className={`h-3 rounded-full transition-all duration-500 ${
-          step === 1
-            ? "w-1/3 bg-blue-500"
-            : step === 2
-            ? "w-2/3 bg-blue-600"
-            : "w-full bg-green-500"
-        }`}
-      />
-      <div className="flex justify-between text-sm mt-2">
-        {stages.map((s, i) => (
-          <span key={i} className={`${step - 1 >= i ? "text-blue-700" : "text-gray-400"}`}>
-            {s}
-          </span>
-        ))}
+    <div className="max-w-6xl mx-auto px-6 mt-6">
+      <div className="relative bg-gray-200 h-2 rounded-full overflow-hidden">
+        <div style={{width: `${percent}%`}} className="absolute left-0 top-0 h-2 bg-gradient-to-r from-green-400 to-blue-500 transition-all"/>
+      </div>
+      <div className="flex justify-between text-xs text-gray-600 mt-2">
+        {labels.map((l,i) => <div key={i} className={i+1===step ? "font-semibold text-gray-800" : ""}>{l}</div>)}
       </div>
     </div>
   );

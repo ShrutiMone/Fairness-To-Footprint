@@ -1,6 +1,7 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 # Ignore node modules
 frontend/node_modules/
+backend/saved_models/
 
 # Ignore Python virtual environment
 backend/venv/

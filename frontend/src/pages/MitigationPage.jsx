@@ -1,0 +1,265 @@
+import React, { useState } from "react";
+import { mitigateDataset, mitigateUserModel } from "../utils/api";
+
+const MitigationPage = ({ uploadedFile }) => {
+  const [file, setFile] = useState(uploadedFile || null);
+  const [userModel, setUserModel] = useState(null);
+  const [target, setTarget] = useState("");
+  const [sensitive, setSensitive] = useState("");
+  const [constraint, setConstraint] = useState("demographic_parity");
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState("builtin"); // "builtin" or "user_model"
+
+  const run = async () => {
+    if (!file || !target || !sensitive) { alert("Choose file, target and sensitive"); return; }
+    
+    setLoading(true);
+    let res;
+    if (mode === "builtin") {
+      res = await mitigateDataset(file, target, sensitive, constraint);
+    } else {
+      if (!userModel) { alert("Upload your model file"); setLoading(false); return; }
+      res = await mitigateUserModel(file, userModel, target, sensitive, constraint);
+    }
+    setResult(res);
+    setLoading(false);
+  };
+
+  // Derived view data for nicer rendering
+  const overallBaseline = result?.metrics_baseline?.overall || {};
+  const overall = result?.metrics_after_mitigation?.overall || {};
+  const byGroupBaseline = result?.metrics_baseline?.by_group || {};
+  const byGroup = result?.metrics_after_mitigation?.by_group || {};
+  const predictions = result?.predictions || [];
+  const posCount = predictions.filter((p) => p === 1).length;
+  const negCount = predictions.length - posCount;
+  const posPct = predictions.length ? ((posCount / predictions.length) * 100).toFixed(1) : "0.0";
+  const fmt = (v) => (typeof v === "number" ? v : v);
+  const improvement = (baseline, after) => {
+    if (typeof baseline === "number" && typeof after === "number") {
+      const delta = baseline - after;
+      const color = delta > 0 ? "text-green-600" : delta < 0 ? "text-red-600" : "text-gray-600";
+      const arrow = delta > 0 ? "↓" : delta < 0 ? "↑" : "→";
+      return <span className={color}> {arrow} {Math.abs(delta).toFixed(4)}</span>;
+    }
+    return null;
+  };
+  return (
+    <div id="mitigation" className="max-w-4xl mx-auto mt-8 bg-white p-6 rounded-lg shadow">
+      <h3 className="text-xl font-semibold mb-4">Fairness Mitigation</h3>
+      
+      <div className="mb-4 border-b pb-4">
+        <label className="block text-sm font-semibold mb-2">Choose Mode:</label>
+        <div className="flex gap-4">
+          <label className="flex items-center">
+            <input type="radio" value="builtin" checked={mode === "builtin"} onChange={(e) => { setMode(e.target.value); setUserModel(null); }} className="mr-2" />
+            Build new logistic regression model from data
+          </label>
+          <label className="flex items-center">
+            <input type="radio" value="user_model" checked={mode === "user_model"} onChange={(e) => { setMode(e.target.value); }} className="mr-2" />
+            Upload your pre-trained model for mitigation
+          </label>
+        </div>
+      </div>
+      
+      <div className="space-y-3 mb-4">
+        <div>
+          <label className="block text-sm font-semibold mb-1">Data File (CSV)</label>
+          <input type="file" accept=".csv" onChange={(e)=>setFile(e.target.files[0])} className="border p-2 w-full rounded" />
+          {file && <p className="text-xs text-gray-600 mt-1">File: {file.name}</p>}
+        </div>
+
+        {mode === "user_model" && (
+          <div>
+            <label className="block text-sm font-semibold mb-1">Pre-trained Model (.joblib or .pkl)</label>
+            <input type="file" accept=".joblib,.pkl" onChange={(e)=>setUserModel(e.target.files[0])} className="border p-2 w-full rounded" />
+            {userModel && <p className="text-xs text-gray-600 mt-1">Model: {userModel.name}</p>}
+            <p className="text-xs text-gray-500 mt-1">Upload a .joblib or .pkl file of your trained model (scikit-learn, etc.)</p>
+          </div>
+        )}
+
+        <div>
+          <label className="block text-sm font-semibold mb-1">Target Column</label>
+          <input placeholder="e.g., 'approved'" value={target} onChange={e=>setTarget(e.target.value)} className="border p-2 w-full rounded" />
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold mb-1">Sensitive Attribute Column</label>
+          <input placeholder="e.g., 'gender'" value={sensitive} onChange={e=>setSensitive(e.target.value)} className="border p-2 w-full rounded" />
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold mb-1">Fairness Constraint</label>
+          <select value={constraint} onChange={e=>setConstraint(e.target.value)} className="border p-2 w-full rounded">
+            <option value="demographic_parity">Demographic Parity (equal selection rates)</option>
+            <option value="equalized_odds">Equalized Odds (equal error rates)</option>
+          </select>
+        </div>
+      </div>
+
+      <button onClick={run} disabled={loading} className="bg-green-600 text-white px-6 py-2 rounded font-semibold hover:bg-green-700 disabled:opacity-50">
+        {loading ? "Running mitigation..." : "Run Mitigation"}
+      </button>
+
+      {result && (
+        <div className="mt-6">
+          <h4 className="font-semibold mb-3">Mitigation Result</h4>
+          {result.error ? (
+            <div className="text-red-600">{result.error}</div>
+          ) : (
+            <>
+              {result.model_download_url && (
+                <div className="mb-4">
+                  <a
+                    href={result.model_download_url}
+                    download
+                    className="bg-blue-600 text-white px-4 py-2 rounded inline-block hover:bg-blue-700"
+                  >
+                    📥 Download Mitigated Model
+                  </a>
+                  <p className="text-xs text-gray-600 mt-1">
+                    Model ID: {result.model_id}
+                  </p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-white border rounded p-4 shadow-sm">
+                  <h5 className="font-semibold mb-2">Before Mitigation</h5>
+                  <ul className="text-sm space-y-1">
+                    {Object.entries(overallBaseline).length === 0 && <li className="text-gray-500">No baseline metrics</li>}
+                    {Object.entries(overallBaseline).map(([k, v]) => (
+                      <li key={k} className="flex justify-between">
+                        <span className="text-gray-700">{k}:</span>
+                        <span className="font-medium">{fmt(v)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="bg-white border rounded p-4 shadow-sm">
+                  <h5 className="font-semibold mb-2">After Mitigation</h5>
+                  <ul className="text-sm space-y-1">
+                    {Object.entries(overall).length === 0 && <li className="text-gray-500">No mitigation metrics</li>}
+                    {Object.entries(overall).map(([k, v]) => (
+                      <li key={k} className="flex justify-between">
+                        <span className="text-gray-700">{k}:</span>
+                        <span className="font-medium">
+                          {fmt(v)}
+                          {improvement(overallBaseline[k], v)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                <div className="bg-white border rounded p-4 shadow-sm">
+                  <h5 className="font-semibold mb-2">Group Metrics (Before)</h5>
+                  {Object.keys(byGroupBaseline).length === 0 ? (
+                    <div className="text-gray-500 text-sm">No group metrics</div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm table-auto">
+                        <thead>
+                          <tr className="text-left text-xs text-gray-600">
+                            <th className="pb-2">Group</th>
+                            <th className="pb-2">Sel.Rate</th>
+                            <th className="pb-2">FPR</th>
+                            <th className="pb-2">FNR</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(byGroupBaseline).map(([g, metrics]) => (
+                            <tr key={g} className="border-t">
+                              <td className="py-2">{g}</td>
+                              <td className="py-2">{metrics["Selection Rate"] ?? "-"}</td>
+                              <td className="py-2">{metrics["False Positive Rate"] ?? "-"}</td>
+                              <td className="py-2">{metrics["False Negative Rate"] ?? "-"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-white border rounded p-4 shadow-sm">
+                  <h5 className="font-semibold mb-2">Group Metrics (After)</h5>
+                  {Object.keys(byGroup).length === 0 ? (
+                    <div className="text-gray-500 text-sm">No group metrics</div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm table-auto">
+                        <thead>
+                          <tr className="text-left text-xs text-gray-600">
+                            <th className="pb-2">Group</th>
+                            <th className="pb-2">Sel.Rate</th>
+                            <th className="pb-2">FPR</th>
+                            <th className="pb-2">FNR</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(byGroup).map(([g, metrics]) => (
+                            <tr key={g} className="border-t">
+                              <td className="py-2">{g}</td>
+                              <td className="py-2">{metrics["Selection Rate"] ?? "-"}</td>
+                              <td className="py-2">{metrics["False Positive Rate"] ?? "-"}</td>
+                              <td className="py-2">{metrics["False Negative Rate"] ?? "-"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                <div className="bg-white border rounded p-4 shadow-sm">
+                  <h5 className="font-semibold mb-2">Weights</h5>
+                  <div className="space-y-2">
+                    {(result.weights || []).map((w, i) => (
+                      <div key={i}>
+                        <div className="flex justify-between text-xs text-gray-600 mb-1">
+                          <span>Predictor {i + 1}</span>
+                          <span>{(w * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div className="bg-green-500 h-2 rounded-full" style={{ width: `${Math.max(0, Math.min(100, w * 100))}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-white border rounded p-4 shadow-sm">
+                  <h5 className="font-semibold mb-2">Predictions Summary</h5>
+                  <div className="text-sm">
+                    <div className="flex justify-between">
+                      <span>Positive</span>
+                      <span className="font-medium">{posCount} ({posPct}%)</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Negative</span>
+                      <span className="font-medium">{negCount}</span>
+                    </div>
+                    <div className="mt-3">
+                      <div className="w-full bg-gray-200 rounded-full h-3">
+                        <div className="bg-blue-500 h-3 rounded-full" style={{ width: `${posPct}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default MitigationPage;

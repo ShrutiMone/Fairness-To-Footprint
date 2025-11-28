@@ -1,26 +1,40 @@
 import React, { useState } from "react";
-import FileUpload from "./components/FileUpload";
+import Navbar from "./components/Navbar";
 import ProgressBar from "./components/ProgressBar";
-import ReportPage from "./components/ReportPage";
+import FileUpload from "./components/FileUpload";
+import ReportPage from "./pages/ReportPage";
+import MitigationPage from "./pages/MitigationPage";
 import { analyzeDataset } from "./utils/api";
 
-function App() {
+function App(){
   const [step, setStep] = useState(1);
   const [results, setResults] = useState(null);
+  const [uploadedFile, setUploadedFile] = useState(null);
 
-  const handleSubmit = async (file, target, sensitive) => {
+  const handleSubmit = async (file, target, sensitive, pred_col) => {
+    setUploadedFile(file);
     setStep(2);
-    const res = await analyzeDataset(file, target, sensitive);
+    const res = await analyzeDataset(file, target, sensitive, pred_col);
     setResults(res);
     setStep(3);
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="min-h-screen bg-gray-50">
+      <Navbar />
       <ProgressBar step={step} />
-      {step === 1 && <FileUpload onSubmit={handleSubmit} />}
-      {step === 2 && <p className="text-center mt-10 text-lg text-gray-600 animate-pulse">Processing dataset...</p>}
-      {step === 3 && <ReportPage results={results} />}
+      <div className="max-w-6xl mx-auto px-6 py-8">
+        {step === 1 && <FileUpload onSubmit={handleSubmit} />}
+        {step === 2 && <div className="text-center mt-8">Processing... please wait.</div>}
+        {step === 3 && (
+          <>
+            <ReportPage results={results} />
+            <div className="mt-6">
+              <MitigationPage uploadedFile={uploadedFile} />
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
