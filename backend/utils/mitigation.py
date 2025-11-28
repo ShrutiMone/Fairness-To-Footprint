@@ -2,14 +2,20 @@
 
 from fairlearn.reductions import ExponentiatedGradient, DemographicParity, EqualizedOdds
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import OneHotEncoder, LabelEncoder
+from sklearn.preprocessing import OneHotEncoder, LabelEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction import FeatureHasher
+from sklearn.linear_model import SGDClassifier
 import pandas as pd
 import numpy as np
 
 from .fairness_metrics import compute_fairness_metrics
-from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.base import BaseEstimator, ClassifierMixin, TransformerMixin
+import warnings
+from sklearn.exceptions import ConvergenceWarning
+# Suppress scikit-learn ConvergenceWarning messages that are expected
+warnings.filterwarnings('ignore', category=ConvergenceWarning)
 
 
 class PipelineSampleWeightAdapter(BaseEstimator, ClassifierMixin):
@@ -69,12 +75,58 @@ def _prepare_features(df: pd.DataFrame, target_col: str, sensitive_col: str):
 
     transformer = ColumnTransformer(
         transformers=[
-            ("num", "passthrough", numeric_cols),
-            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat_cols),
+            ("num", StandardScaler(), numeric_cols),
+            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=True), cat_cols),
         ],
-        remainder="drop"
+        remainder="drop",
+        sparse_threshold=0.0,
     )
     return transformer
+
+
+class CatHasher(BaseEstimator, TransformerMixin):
+    """scikit-learn compatible transformer that applies FeatureHasher to categorical columns.
+
+    This implements `get_params` and `set_params` so it can be cloned/pickled by sklearn utilities.
+    """
+    def __init__(self, cols, n_features=2**12):
+        self.cols = cols
+        self.n_features = n_features
+        # hasher will be (re)created in __init__ and when params change
+        self.hasher = FeatureHasher(n_features=self.n_features, input_type='dict')
+
+    def fit(self, X, y=None):
+        # nothing to fit for hashing
+        return self
+
+    def transform(self, X):
+        # X is expected to be a DataFrame or array-like with same columns
+        # Convert each row's categorical columns to a dict
+        if hasattr(X, 'loc'):
+            df = X
+            dicts = df[self.cols].fillna('MISSING').astype(str).to_dict(orient='records')
+        else:
+            # X may be a 2D numpy array (subset of columns). Convert rows to dicts using self.cols
+            arr = np.asarray(X)
+            if arr.ndim == 1:
+                arr = arr.reshape(-1, 1)
+            dicts = []
+            for row in arr:
+                row_vals = [str(v) if (v is not None and not (isinstance(v, float) and np.isnan(v))) else 'MISSING' for v in row]
+                dicts.append(dict(zip(self.cols, row_vals)))
+        return self.hasher.transform(dicts)
+
+    def get_params(self, deep=True):
+        return {"cols": self.cols, "n_features": self.n_features}
+
+    def set_params(self, **params):
+        if "cols" in params:
+            self.cols = params.pop("cols")
+        if "n_features" in params:
+            self.n_features = params.pop("n_features")
+        # recreate hasher if params changed
+        self.hasher = FeatureHasher(n_features=self.n_features, input_type='dict')
+        return self
 
 
 def mitigate_with_exponentiated_gradient(df: pd.DataFrame, target_col: str, sensitive_col: str,
@@ -98,15 +150,42 @@ def mitigate_with_exponentiated_gradient(df: pd.DataFrame, target_col: str, sens
     # ===============================
     # 2. Prepare feature matrix X
     # ===============================
-    transformer = _prepare_features(df, target_col, sensitive_col)
-
     X = df.drop(columns=[target_col])              # original X
     X = X.drop(columns=[sensitive_col])            # remove sensitive from X
 
-    # ===============================
-    # 3. Build model
-    # ===============================
-    base_clf = LogisticRegression(max_iter=2000)
+    numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = X.select_dtypes(exclude=[np.number]).columns.tolist()
+
+    # Estimate OHE dimensionality to decide on fast path
+    est_ohe_dims = sum([int(df[c].nunique()) for c in cat_cols]) if cat_cols else 0
+    rows = df.shape[0]
+
+    # Heuristics: use fast hashed + SGD path for large datasets or very high-cardinality categoricals
+    use_fast_path = (rows > 20000) or (est_ohe_dims > 1000)
+
+    if use_fast_path:
+        # Fast pipeline: scale numeric, hash categorical to fixed-size sparse features, use SGD
+        n_features = 2 ** 12
+        transformer = ColumnTransformer(
+            transformers=[
+                ("num", StandardScaler(), numeric_cols),
+                ("cat", CatHasher(cat_cols, n_features=n_features), cat_cols),
+            ],
+            remainder="drop",
+            sparse_threshold=0.0,
+        )
+
+        # use 'log_loss' name for logistic loss (newer sklearn versions)
+        base_clf = SGDClassifier(loss='log_loss', max_iter=1000, tol=1e-3)
+        strategy = "fast-hash-sgd"
+        # rough time estimate (seconds): 2s per 1000 rows as conservative baseline
+        time_estimate = max(5, int(rows / 1000 * 2))
+    else:
+        # Standard pipeline: OHE + LogisticRegression with saga
+        transformer = _prepare_features(df, target_col, sensitive_col)
+        base_clf = LogisticRegression(max_iter=2000, solver='saga', n_jobs=-1)
+        strategy = "ohe-logistic"
+        time_estimate = max(10, int(rows / 1000 * 3))
 
     clf_pipeline = Pipeline(steps=[
         ("pre", transformer),
@@ -174,7 +253,9 @@ def mitigate_with_exponentiated_gradient(df: pd.DataFrame, target_col: str, sens
         "weights": [float(w) for w in mitigator.weights_],
         "mitigator": mitigator,
         "transformer": transformer,
-        "label_encoder": le
+        "label_encoder": le,
+        "strategy": strategy,
+        "time_estimate_seconds": time_estimate
     }
 
 

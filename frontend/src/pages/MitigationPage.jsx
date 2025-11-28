@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { mitigateDataset, mitigateUserModel } from "../utils/api";
+import React, { useState, useRef } from "react";
+import { mitigateDataset, mitigateUserModel, mitigateDatasetAsync, mitigateUserModelAsync, getProgress, getResult } from "../utils/api";
 
 const MitigationPage = ({ uploadedFile }) => {
   const [file, setFile] = useState(uploadedFile || null);
@@ -9,21 +9,65 @@ const MitigationPage = ({ uploadedFile }) => {
   const [constraint, setConstraint] = useState("demographic_parity");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [jobPercent, setJobPercent] = useState(0);
+  const [jobMessage, setJobMessage] = useState("");
+  const pollRef = useRef(null);
   const [mode, setMode] = useState("builtin"); // "builtin" or "user_model"
 
   const run = async () => {
     if (!file || !target || !sensitive) { alert("Choose file, target and sensitive"); return; }
     
     setLoading(true);
-    let res;
-    if (mode === "builtin") {
-      res = await mitigateDataset(file, target, sensitive, constraint);
-    } else {
-      if (!userModel) { alert("Upload your model file"); setLoading(false); return; }
-      res = await mitigateUserModel(file, userModel, target, sensitive, constraint);
+    try {
+      // Start async mitigation job and poll progress
+      let startRes;
+      if (mode === "builtin") {
+        startRes = await mitigateDatasetAsync(file, target, sensitive, constraint);
+      } else {
+        if (!userModel) { alert("Upload your model file"); setLoading(false); return; }
+        // we reuse the same async endpoint for user models for simplicity
+        startRes = await mitigateUserModelAsync(file, userModel, target, sensitive, constraint);
+      }
+
+      const jobId = startRes.job_id;
+      if (!jobId) {
+        // fallback: maybe returned immediate result
+        setResult(startRes);
+        setLoading(false);
+        return;
+      }
+
+      setJobPercent(0);
+      setJobMessage("queued");
+
+      // poll progress
+      pollRef.current = setInterval(async () => {
+        try {
+          const p = await getProgress(jobId);
+          setJobPercent(p.percent || 0);
+          setJobMessage(p.message || "running");
+          if (p.status === "done") {
+            clearInterval(pollRef.current);
+            const final = await getResult(jobId);
+            setResult(final);
+            setLoading(false);
+          } else if (p.status === "failed") {
+            clearInterval(pollRef.current);
+            const final = await getResult(jobId);
+            setResult(final);
+            setLoading(false);
+          }
+        } catch (err) {
+          console.error(err);
+          clearInterval(pollRef.current);
+          setLoading(false);
+        }
+      }, 1000);
+    } catch (err) {
+      console.error(err);
+      setResult({ error: String(err) });
+      setLoading(false);
     }
-    setResult(res);
-    setLoading(false);
   };
 
   // Derived view data for nicer rendering
@@ -31,6 +75,7 @@ const MitigationPage = ({ uploadedFile }) => {
   const overall = result?.metrics_after_mitigation?.overall || {};
   const byGroupBaseline = result?.metrics_baseline?.by_group || {};
   const byGroup = result?.metrics_after_mitigation?.by_group || {};
+  const suggestions = result?.suggestions || [];
   const predictions = result?.predictions || [];
   const posCount = predictions.filter((p) => p === 1).length;
   const negCount = predictions.length - posCount;
@@ -102,6 +147,15 @@ const MitigationPage = ({ uploadedFile }) => {
         {loading ? "Running mitigation..." : "Run Mitigation"}
       </button>
 
+      {loading && (
+        <div className="mt-4">
+          <div className="text-sm text-gray-600 mb-2">{jobMessage} — {jobPercent}%</div>
+          <div className="w-full bg-gray-200 rounded-full h-3">
+            <div className="bg-blue-600 h-3 rounded-full" style={{ width: `${jobPercent}%` }} />
+          </div>
+        </div>
+      )}
+
       {result && (
         <div className="mt-6">
           <h4 className="font-semibold mb-3">Mitigation Result</h4>
@@ -109,6 +163,18 @@ const MitigationPage = ({ uploadedFile }) => {
             <div className="text-red-600">{result.error}</div>
           ) : (
             <>
+              {/* Suggestions Section */}
+              {suggestions && suggestions.length > 0 && (
+                <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg mb-4 shadow-sm">
+                  <h5 className="text-lg font-semibold mb-2 text-yellow-800">Suggested Improvements for Dataset</h5>
+                  <ul className="list-disc pl-6 text-yellow-900 space-y-1 text-sm">
+                    {suggestions.map((s, i) => (
+                      <li key={i}>{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {result.model_download_url && (
                 <div className="mb-4">
                   <a
@@ -121,6 +187,14 @@ const MitigationPage = ({ uploadedFile }) => {
                   <p className="text-xs text-gray-600 mt-1">
                     Model ID: {result.model_id}
                   </p>
+                </div>
+              )}
+
+              {/* Strategy / estimate */}
+              {(result.strategy || result.time_estimate_seconds) && (
+                <div className="mb-4 text-sm text-gray-700">
+                  {result.strategy && <div>Strategy used: <span className="font-medium">{result.strategy}</span></div>}
+                  {result.time_estimate_seconds && <div>Estimated time: <span className="font-medium">{result.time_estimate_seconds}s</span></div>}
                 </div>
               )}
 

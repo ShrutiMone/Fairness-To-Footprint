@@ -1,11 +1,12 @@
 import React from "react";
 
+
 const ReportPage = ({ results }) => {
   if (!results) return null;
   if (results.error) {
     return <div className="max-w-3xl mx-auto mt-8 p-4 bg-red-100 text-red-700 rounded">{results.error}</div>;
   }
-  const { overall, by_group } = results;
+  const { overall, by_group, suggestions } = results;
 
   return (
     <div id="report" className="max-w-6xl mx-auto mt-8 space-y-6">
@@ -20,6 +21,18 @@ const ReportPage = ({ results }) => {
           </tbody>
         </table>
       </div>
+
+      {/* Suggestions Section */}
+      {suggestions && suggestions.length > 0 && (
+        <div className="bg-yellow-50 border-l-4 border-yellow-400 p-6 rounded-lg shadow">
+          <h3 className="text-lg font-semibold mb-3 text-yellow-800">Suggested Improvements</h3>
+          <ul className="list-disc pl-6 text-yellow-900 space-y-2">
+            {suggestions.map((s, i) => (
+              <li key={i}>{s}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="grid md:grid-cols-2 gap-6">
         {by_group && Object.entries(by_group).map(([group, metrics]) => (

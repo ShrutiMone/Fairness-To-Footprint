@@ -20,6 +20,27 @@ export const mitigateDataset = async (file, target, sensitive, constraint="demog
   return res.json();
 };
 
+export const mitigateDatasetAsync = async (file, target, sensitive, constraint="demographic_parity") => {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("target", target);
+  formData.append("sensitive", sensitive);
+  formData.append("constraint", constraint);
+
+  const res = await fetch("http://127.0.0.1:5000/mitigate_async", { method: "POST", body: formData });
+  return res.json(); // { job_id }
+};
+
+export const getProgress = async (jobId) => {
+  const res = await fetch(`http://127.0.0.1:5000/progress/${jobId}`);
+  return res.json();
+};
+
+export const getResult = async (jobId) => {
+  const res = await fetch(`http://127.0.0.1:5000/result/${jobId}`);
+  return res.json();
+};
+
 export const mitigateUserModel = async (dataFile, modelFile, target, sensitive, constraint="demographic_parity") => {
   const formData = new FormData();
   formData.append("file", dataFile);
@@ -29,5 +50,17 @@ export const mitigateUserModel = async (dataFile, modelFile, target, sensitive, 
   formData.append("constraint", constraint);
 
   const res = await fetch("http://127.0.0.1:5000/mitigate_user_model", { method: "POST", body: formData });
+  return res.json();
+};
+
+export const mitigateUserModelAsync = async (dataFile, modelFile, target, sensitive, constraint="demographic_parity") => {
+  const formData = new FormData();
+  formData.append("file", dataFile);
+  formData.append("user_model", modelFile);
+  formData.append("target", target);
+  formData.append("sensitive", sensitive);
+  formData.append("constraint", constraint);
+
+  const res = await fetch("http://127.0.0.1:5000/mitigate_user_model_async", { method: "POST", body: formData });
   return res.json();
 };

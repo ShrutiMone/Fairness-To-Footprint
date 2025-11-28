@@ -1,3 +1,53 @@
+def generate_user_specific_suggestions(df, metrics, target_col, sensitive_col):
+    """
+    Generate tailored suggestions for dataset/model improvements based on metrics and dataset properties.
+    Args:
+        df: pandas DataFrame
+        metrics: dict from compute_fairness_metrics
+        target_col: str
+        sensitive_col: str
+    Returns:
+        List of suggestion strings
+    """
+    suggestions = []
+    overall = metrics.get("overall", {})
+    dp_diff = overall.get("Demographic Parity Difference", 0)
+    eo_diff = overall.get("Equalized Odds Difference", 0)
+    fpr_diff = overall.get("False Positive Rate Difference", 0)
+    fnr_diff = overall.get("False Negative Rate Difference", 0)
+
+    # Fairness metric thresholds
+    if abs(dp_diff) > 0.1:
+        suggestions.append(f"Demographic Parity Difference is {dp_diff:.4f}. Consider balancing sensitive groups or applying fairness mitigation.")
+    if abs(eo_diff) > 0.1:
+        suggestions.append(f"Equalized Odds Difference is {eo_diff:.4f}. Consider collecting more data for underrepresented groups or using fairness-aware algorithms.")
+    if abs(fpr_diff) > 0.1 or abs(fnr_diff) > 0.1:
+        suggestions.append("False positive/negative rate differences are high between groups. Review feature selection and data balance.")
+
+    # Class balance
+    if target_col in df.columns:
+        class_counts = df[target_col].value_counts()
+        if class_counts.min() / class_counts.max() < 0.5:
+            suggestions.append("Target classes are imbalanced. Consider collecting more data for the minority class.")
+
+    # Sensitive attribute balance
+    if sensitive_col in df.columns:
+        sensitive_counts = df[sensitive_col].value_counts()
+        if sensitive_counts.min() / sensitive_counts.max() < 0.5:
+            suggestions.append("Sensitive attribute groups are imbalanced. Consider collecting more data for underrepresented groups.")
+
+    # Missing values
+    missing = df.isnull().sum()
+    if missing.any():
+        missing_cols = missing[missing > 0].index.tolist()
+        if missing_cols:
+            suggestions.append(f"Columns with missing values: {missing_cols}")
+
+    # If no major issues
+    if not suggestions:
+        suggestions.append("No major issues detected. Your dataset and model appear to be fair and accurate.")
+
+    return suggestions
 # backend/utils/fairness_metrics.py
 from fairlearn.metrics import (
     MetricFrame,

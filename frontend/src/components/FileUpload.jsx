@@ -6,7 +6,14 @@ function readCSVHeaders(file) {
     reader.onload = (e) => {
       const text = e.target.result;
       const firstLine = text.split(/\r?\n/)[0];
-      const headers = firstLine.split(",").map(h => h.trim());
+      const headers = firstLine.split(",").map(h => {
+        h = h.trim();
+        // Remove surrounding quotes if present
+        if ((h.startsWith('"') && h.endsWith('"')) || (h.startsWith("'") && h.endsWith("'"))) {
+          h = h.slice(1, -1);
+        }
+        return h;
+      });
       resolve(headers);
     };
     reader.onerror = reject;
