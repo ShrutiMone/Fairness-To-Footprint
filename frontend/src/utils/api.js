@@ -1,9 +1,12 @@
-export const analyzeDataset = async (file, target, sensitive, pred_col=null) => {
+export const analyzeDataset = async (file, target, sensitive, pred_col=null, train_baseline=true, modelFile=null, wrapModel=false) => {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("target", target);
   formData.append("sensitive", sensitive);
+  formData.append("train_baseline", train_baseline ? "1" : "0");
+  formData.append("wrap_model", wrapModel ? "1" : "0");
   if (pred_col) formData.append("pred_col", pred_col);
+  if (modelFile) formData.append("user_model", modelFile);
 
   const res = await fetch("http://127.0.0.1:5000/analyze", { method: "POST", body: formData });
   return res.json();

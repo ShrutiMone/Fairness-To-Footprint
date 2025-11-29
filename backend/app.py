@@ -7,8 +7,8 @@ import os
 import uuid
 from datetime import datetime
 
-from utils.fairness_metrics import compute_fairness_metrics
-from utils.mitigation import mitigate_with_exponentiated_gradient, mitigate_user_model
+from utils.fairness_metrics import compute_fairness_metrics, generate_user_specific_suggestions
+from utils.mitigation import mitigate_with_exponentiated_gradient, mitigate_user_model, train_baseline_only, build_transformer
 from threading import Thread
 import uuid
 import time
@@ -34,13 +34,81 @@ def analyze():
         target = request.form.get("target")
         sensitive = request.form.get("sensitive")
         pred_col = request.form.get("pred_col", None)
+        # Optional behavior: train a baseline model internally or use an uploaded user model
+        train_baseline_flag = request.form.get("train_baseline", "true").lower() in ("1", "true", "yes")
+        user_model_file = request.files.get("user_model", None)
 
         if not target or not sensitive:
             return jsonify({"error": "target and sensitive are required"}), 400
 
         df = pd.read_csv(file)
+
+        # If a user-uploaded model is present, use it to produce predictions
+        if user_model_file:
+            wrap_model_flag = request.form.get("wrap_model", "false").lower() in ("1", "true", "yes")
+            try:
+                user_model = joblib.load(user_model_file)
+            except Exception:
+                import pickle
+                user_model_file.seek(0)
+                user_model = pickle.load(user_model_file)
+
+            # Prepare feature matrix for prediction (drop target and sensitive)
+            X = df.drop(columns=[target, sensitive], errors='ignore')
+            # First try to predict as-is
+            try:
+                y_pred = user_model.predict(X)
+                wrapped = False
+            except Exception as e:
+                # If prediction fails and user asked for wrapping, try to build transformer and wrap
+                if wrap_model_flag:
+                    try:
+                        transformer, strat, te = build_transformer(df, target, sensitive)
+                        from sklearn.pipeline import Pipeline as SKPipeline
+                        pipeline = SKPipeline([("pre", transformer), ("model", user_model)])
+                        y_pred = pipeline.predict(X)
+                        wrapped = True
+                    except Exception as e2:
+                        return jsonify({"error": f"Failed to predict with or without wrapping: {str(e2)}"}), 400
+                else:
+                    return jsonify({"error": f"Failed to run predict on uploaded model: {str(e)}. You can enable 'wrap_model' to try applying standard preprocessing."}), 400
+
+            tmp = df.copy()
+            tmp["y_pred"] = y_pred
+            metrics = compute_fairness_metrics(tmp, target, sensitive, pred_col="y_pred")
+            suggestions = generate_user_specific_suggestions(df, metrics, target, sensitive)
+            # Return in same shape as previous API: top-level overall/by_group keys
+            out = {}
+            out.update(metrics)
+            out["suggestions"] = suggestions
+            out["used_user_model"] = True
+            out["wrapped_user_model"] = bool(wrapped)
+            return jsonify(out)
+
+        # If requested, train a baseline model internally and produce predictions+metrics
+        if train_baseline_flag:
+            # Use a lightweight baseline-only trainer (faster) to produce baseline predictions and metrics.
+            res = train_baseline_only(df, target, sensitive)
+
+            # Remove heavy objects before returning
+            res.pop("pipeline", None)
+
+            metrics = res.get("metrics_baseline") or {}
+            suggestions = generate_user_specific_suggestions(df, metrics, target, sensitive)
+            out = {}
+            out.update(metrics)
+            out["suggestions"] = suggestions
+            out["strategy"] = res.get("strategy")
+            out["time_estimate_seconds"] = res.get("time_estimate_seconds")
+            return jsonify(out)
+
+        # Default: compute metrics using provided pred_col (or default to y_true if no pred_col)
         res = compute_fairness_metrics(df, target, sensitive, pred_col=pred_col)
-        return jsonify(res)
+        suggestions = generate_user_specific_suggestions(df, res, target, sensitive)
+        out = {}
+        out.update(res)
+        out["suggestions"] = suggestions
+        return jsonify(out)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

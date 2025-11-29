@@ -84,6 +84,90 @@ def _prepare_features(df: pd.DataFrame, target_col: str, sensitive_col: str):
     return transformer
 
 
+def build_transformer(df: pd.DataFrame, target_col: str, sensitive_col: str):
+    """
+    Build a preprocessing transformer used by the baseline trainer and optional model-wrapping.
+    Returns the ColumnTransformer and strategy/time estimate used.
+    """
+    X = df.drop(columns=[target_col], errors='ignore')
+    X = X.drop(columns=[sensitive_col], errors='ignore')
+
+    numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = X.select_dtypes(exclude=[np.number]).columns.tolist()
+
+    est_ohe_dims = sum([int(df[c].nunique()) for c in cat_cols]) if cat_cols else 0
+    rows = df.shape[0]
+    use_fast_path = (rows > 20000) or (est_ohe_dims > 1000)
+
+    if use_fast_path:
+        n_features = 2 ** 12
+        transformer = ColumnTransformer(
+            transformers=[
+                ("num", StandardScaler(), numeric_cols),
+                ("cat", CatHasher(cat_cols, n_features=n_features), cat_cols),
+            ],
+            remainder="drop",
+            sparse_threshold=0.0,
+        )
+        strategy = "fast-hash-sgd"
+        time_estimate = max(5, int(rows / 1000 * 2))
+    else:
+        transformer = _prepare_features(df, target_col, sensitive_col)
+        strategy = "ohe-logistic"
+        time_estimate = max(10, int(rows / 1000 * 3))
+
+    return transformer, strategy, time_estimate
+
+
+def train_baseline_only(df: pd.DataFrame, target_col: str, sensitive_col: str):
+    """
+    Train only the baseline pipeline (preprocessor + classifier) and return baseline
+    predictions and baseline fairness metrics. This is faster than running the full
+    mitigation helper since it does not fit the ExponentiatedGradient mitigator.
+    """
+    le = LabelEncoder()
+    y = le.fit_transform(df[target_col])
+
+    transformer, strategy, time_estimate = build_transformer(df, target_col, sensitive_col)
+
+    # choose classifier based on strategy
+    if strategy == "fast-hash-sgd":
+        base_clf = SGDClassifier(loss='log_loss', max_iter=1000, tol=1e-3)
+    else:
+        base_clf = LogisticRegression(max_iter=2000, solver='saga', n_jobs=-1)
+
+    X = df.drop(columns=[target_col], errors='ignore')
+    X = X.drop(columns=[sensitive_col], errors='ignore')
+
+    clf_pipeline = Pipeline(steps=[
+        ("pre", transformer),
+        ("clf", base_clf)
+    ])
+
+    clf_pipeline.fit(X, y)
+    y_pred_baseline = clf_pipeline.predict(X)
+
+    tmp_baseline = df.copy()
+    tmp_baseline["y_pred_baseline"] = y_pred_baseline
+
+    metrics_baseline = compute_fairness_metrics(
+        tmp_baseline,
+        target_col=target_col,
+        sensitive_col=sensitive_col,
+        pred_col="y_pred_baseline"
+    )
+
+    return {
+        "predictions": y_pred_baseline.tolist(),
+        "metrics_baseline": metrics_baseline,
+        "transformer": transformer,
+        "label_encoder": le,
+        "strategy": strategy,
+        "time_estimate_seconds": time_estimate,
+        "pipeline": clf_pipeline,
+    }
+
+
 class CatHasher(BaseEstimator, TransformerMixin):
     """scikit-learn compatible transformer that applies FeatureHasher to categorical columns.
 

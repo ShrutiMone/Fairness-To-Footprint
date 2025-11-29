@@ -1,18 +1,27 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { mitigateDataset, mitigateUserModel, mitigateDatasetAsync, mitigateUserModelAsync, getProgress, getResult } from "../utils/api";
 
-const MitigationPage = ({ uploadedFile }) => {
+const MitigationPage = ({ uploadedFile, selectedTarget, selectedSensitive, uploadedModel }) => {
   const [file, setFile] = useState(uploadedFile || null);
-  const [userModel, setUserModel] = useState(null);
-  const [target, setTarget] = useState("");
-  const [sensitive, setSensitive] = useState("");
+  const [userModel, setUserModel] = useState(uploadedModel || null);
+  const [target, setTarget] = useState(selectedTarget || "");
+  const [sensitive, setSensitive] = useState(selectedSensitive || "");
+  const [mode, setMode] = useState(uploadedModel ? "user_model" : "builtin"); // "builtin" or "user_model"
+  useEffect(() => {
+    if (uploadedFile) setFile(uploadedFile);
+    if (selectedTarget) setTarget(selectedTarget);
+    if (selectedSensitive) setSensitive(selectedSensitive);
+    if (uploadedModel) {
+      setUserModel(uploadedModel);
+      setMode("user_model");
+    }
+  }, [uploadedFile, selectedTarget, selectedSensitive, uploadedModel]);
   const [constraint, setConstraint] = useState("demographic_parity");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [jobPercent, setJobPercent] = useState(0);
   const [jobMessage, setJobMessage] = useState("");
   const pollRef = useRef(null);
-  const [mode, setMode] = useState("builtin"); // "builtin" or "user_model"
 
   const run = async () => {
     if (!file || !target || !sensitive) { alert("Choose file, target and sensitive"); return; }
@@ -94,53 +103,60 @@ const MitigationPage = ({ uploadedFile }) => {
     <div id="mitigation" className="max-w-4xl mx-auto mt-8 bg-white p-6 rounded-lg shadow">
       <h3 className="text-xl font-semibold mb-4">Fairness Mitigation</h3>
       
-      <div className="mb-4 border-b pb-4">
-        <label className="block text-sm font-semibold mb-2">Choose Mode:</label>
-        <div className="flex gap-4">
-          <label className="flex items-center">
-            <input type="radio" value="builtin" checked={mode === "builtin"} onChange={(e) => { setMode(e.target.value); setUserModel(null); }} className="mr-2" />
-            Build new logistic regression model from data
-          </label>
-          <label className="flex items-center">
-            <input type="radio" value="user_model" checked={mode === "user_model"} onChange={(e) => { setMode(e.target.value); }} className="mr-2" />
-            Upload your pre-trained model for mitigation
-          </label>
-        </div>
-      </div>
-      
-      <div className="space-y-3 mb-4">
+      <div className="mb-4 border-b pb-4 space-y-3">
         <div>
-          <label className="block text-sm font-semibold mb-1">Data File (CSV)</label>
-          <input type="file" accept=".csv" onChange={(e)=>setFile(e.target.files[0])} className="border p-2 w-full rounded" />
-          {file && <p className="text-xs text-gray-600 mt-1">File: {file.name}</p>}
-        </div>
-
-        {mode === "user_model" && (
-          <div>
-            <label className="block text-sm font-semibold mb-1">Pre-trained Model (.joblib or .pkl)</label>
-            <input type="file" accept=".joblib,.pkl" onChange={(e)=>setUserModel(e.target.files[0])} className="border p-2 w-full rounded" />
-            {userModel && <p className="text-xs text-gray-600 mt-1">Model: {userModel.name}</p>}
-            <p className="text-xs text-gray-500 mt-1">Upload a .joblib or .pkl file of your trained model (scikit-learn, etc.)</p>
+          <label className="block text-sm font-semibold mb-2">Mitigation Mode:</label>
+          <div className="flex gap-4">
+            <label className="flex items-center">
+              <input type="radio" value="builtin" checked={mode === "builtin"} onChange={(e) => { setMode(e.target.value); }} className="mr-2" />
+              Use baseline model from analysis
+            </label>
+            <label className="flex items-center">
+              <input type="radio" value="user_model" checked={mode === "user_model"} onChange={(e) => { setMode(e.target.value); }} className="mr-2" />
+              Use your uploaded model
+            </label>
           </div>
-        )}
-
-        <div>
-          <label className="block text-sm font-semibold mb-1">Target Column</label>
-          <input placeholder="e.g., 'approved'" value={target} onChange={e=>setTarget(e.target.value)} className="border p-2 w-full rounded" />
         </div>
 
         <div>
-          <label className="block text-sm font-semibold mb-1">Sensitive Attribute Column</label>
-          <input placeholder="e.g., 'gender'" value={sensitive} onChange={e=>setSensitive(e.target.value)} className="border p-2 w-full rounded" />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold mb-1">Fairness Constraint</label>
-          <select value={constraint} onChange={e=>setConstraint(e.target.value)} className="border p-2 w-full rounded">
+          <label className="block text-sm font-semibold mb-2">Fairness Constraint:</label>
+          <select value={constraint} onChange={e=>setConstraint(e.target.value)} className="border p-2 rounded">
             <option value="demographic_parity">Demographic Parity (equal selection rates)</option>
             <option value="equalized_odds">Equalized Odds (equal error rates)</option>
           </select>
         </div>
+      </div>
+      
+      <div className="space-y-3 mb-4">
+        {/* If the page was reached from Analyze, we already have file/target/sensitive; show a compact view */}
+        {file && target && sensitive ? (
+          <div className="text-sm text-gray-700 bg-gray-50 p-3 rounded">
+            <div>📄 Data: <span className="font-medium">{file.name}</span></div>
+            <div>🎯 Target: <span className="font-medium">{target}</span></div>
+            <div>👤 Sensitive: <span className="font-medium">{sensitive}</span></div>
+            {mode === "user_model" && userModel && (
+              <div>🤖 Model: <span className="font-medium">{userModel.name}</span></div>
+            )}
+          </div>
+        ) : (
+          <>
+            <div>
+              <label className="block text-sm font-semibold mb-1">Data File (CSV)</label>
+              <input type="file" accept=".csv" onChange={(e)=>setFile(e.target.files[0])} className="border p-2 w-full rounded" />
+              {file && <p className="text-xs text-gray-600 mt-1">File: {file.name}</p>}
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold mb-1">Target Column</label>
+              <input placeholder="e.g., 'approved'" value={target} onChange={e=>setTarget(e.target.value)} className="border p-2 w-full rounded" />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold mb-1">Sensitive Attribute Column</label>
+              <input placeholder="e.g., 'gender'" value={sensitive} onChange={e=>setSensitive(e.target.value)} className="border p-2 w-full rounded" />
+            </div>
+          </>
+        )}
       </div>
 
       <button onClick={run} disabled={loading} className="bg-green-600 text-white px-6 py-2 rounded font-semibold hover:bg-green-700 disabled:opacity-50">

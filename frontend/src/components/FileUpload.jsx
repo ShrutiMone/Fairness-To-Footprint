@@ -27,6 +27,9 @@ const FileUpload = ({ onSubmit }) => {
   const [target, setTarget] = useState("");
   const [sensitive, setSensitive] = useState("");
   const [predCol, setPredCol] = useState("");
+  const [trainBaseline, setTrainBaseline] = useState(true);
+  const [modelFile, setModelFile] = useState(null);
+  const [wrapModel, setWrapModel] = useState(false);
 
   const handleFile = async (f) => {
     setFile(f);
@@ -45,7 +48,7 @@ const FileUpload = ({ onSubmit }) => {
       alert("Choose file, target and sensitive columns.");
       return;
     }
-    onSubmit(file, target, sensitive, predCol || null);
+    onSubmit(file, target, sensitive, predCol || null, trainBaseline, modelFile, wrapModel);
   };
 
   return (
@@ -74,6 +77,21 @@ const FileUpload = ({ onSubmit }) => {
               <option value="">None</option>
               {headers.map(h => <option key={h} value={h}>{h}</option>)}
             </select>
+          </div>
+          <div className="md:col-span-3">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={trainBaseline} onChange={e=>setTrainBaseline(e.target.checked)} className="mr-2" />
+              <span className="text-sm">Train baseline model internally if no predictions provided</span>
+            </label>
+          </div>
+          <div className="md:col-span-3">
+            <label className="block text-sm font-medium">Optional pre-trained model (.joblib or .pkl)</label>
+            <input type="file" accept=".joblib,.pkl" onChange={(e)=>setModelFile(e.target.files[0])} className="mt-1" />
+            {modelFile && <p className="text-xs text-gray-600 mt-1">Model: {modelFile.name}</p>}
+            <label className="flex items-center gap-2 mt-2">
+              <input type="checkbox" checked={wrapModel} onChange={e=>setWrapModel(e.target.checked)} className="mr-2" />
+              <span className="text-sm">If uploaded model predict fails, apply standard preprocessing and retry</span>
+            </label>
           </div>
         </div>
       )}

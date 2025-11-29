@@ -10,11 +10,17 @@ function App(){
   const [step, setStep] = useState(1);
   const [results, setResults] = useState(null);
   const [uploadedFile, setUploadedFile] = useState(null);
+  const [selectedTarget, setSelectedTarget] = useState(null);
+  const [selectedSensitive, setSelectedSensitive] = useState(null);
+  const [uploadedModel, setUploadedModel] = useState(null);
 
-  const handleSubmit = async (file, target, sensitive, pred_col) => {
+  const handleSubmit = async (file, target, sensitive, pred_col, train_baseline=true, modelFile=null, wrapModel=false) => {
     setUploadedFile(file);
+    setSelectedTarget(target);
+    setSelectedSensitive(sensitive);
+    setUploadedModel(modelFile); // Store the uploaded model for use in Mitigation
     setStep(2);
-    const res = await analyzeDataset(file, target, sensitive, pred_col);
+    const res = await analyzeDataset(file, target, sensitive, pred_col, train_baseline, modelFile, wrapModel);
     setResults(res);
     setStep(3);
   };
@@ -30,7 +36,7 @@ function App(){
           <>
             <ReportPage results={results} />
             <div className="mt-6">
-              <MitigationPage uploadedFile={uploadedFile} />
+              <MitigationPage uploadedFile={uploadedFile} selectedTarget={selectedTarget} selectedSensitive={selectedSensitive} uploadedModel={uploadedModel} />
             </div>
           </>
         )}
