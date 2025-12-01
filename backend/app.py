@@ -9,6 +9,7 @@ from datetime import datetime
 
 from utils.fairness_metrics import compute_fairness_metrics, generate_user_specific_suggestions
 from utils.mitigation import mitigate_with_exponentiated_gradient, mitigate_user_model, train_baseline_only, build_transformer
+from utils.model_loader import load_model
 from threading import Thread
 import uuid
 import time
@@ -46,12 +47,14 @@ def analyze():
         # If a user-uploaded model is present, use it to produce predictions
         if user_model_file:
             wrap_model_flag = request.form.get("wrap_model", "false").lower() in ("1", "true", "yes")
+            
+            # Load model using new model loader (handles joblib, ONNX, Keras, PyTorch, etc.)
             try:
-                user_model = joblib.load(user_model_file)
-            except Exception:
-                import pickle
-                user_model_file.seek(0)
-                user_model = pickle.load(user_model_file)
+                user_model, is_dl_model = load_model(user_model_file, user_model_file.filename)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            except Exception as e:
+                return jsonify({"error": f"Failed to load model: {str(e)}"}), 400
 
             # Prepare feature matrix for prediction (drop target and sensitive)
             X = df.drop(columns=[target, sensitive], errors='ignore')
@@ -66,6 +69,8 @@ def analyze():
                         transformer, strat, te = build_transformer(df, target, sensitive)
                         from sklearn.pipeline import Pipeline as SKPipeline
                         pipeline = SKPipeline([("pre", transformer), ("model", user_model)])
+                        # Fit the pipeline's preprocessing step on the full data
+                        pipeline.fit(X, df[target])
                         y_pred = pipeline.predict(X)
                         wrapped = True
                     except Exception as e2:
@@ -83,6 +88,7 @@ def analyze():
             out["suggestions"] = suggestions
             out["used_user_model"] = True
             out["wrapped_user_model"] = bool(wrapped)
+            out["is_dl_model"] = is_dl_model  # New flag: True if model is deep learning
             return jsonify(out)
 
         # If requested, train a baseline model internally and produce predictions+metrics
@@ -100,6 +106,7 @@ def analyze():
             out["suggestions"] = suggestions
             out["strategy"] = res.get("strategy")
             out["time_estimate_seconds"] = res.get("time_estimate_seconds")
+            out["is_dl_model"] = False  # Baseline is always sklearn
             return jsonify(out)
 
         # Default: compute metrics using provided pred_col (or default to y_true if no pred_col)
@@ -108,6 +115,7 @@ def analyze():
         out = {}
         out.update(res)
         out["suggestions"] = suggestions
+        out["is_dl_model"] = False  # Default case is sklearn
         return jsonify(out)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -234,42 +242,53 @@ def mitigate_user_model_async():
         target = request.form.get("target")
         sensitive = request.form.get("sensitive")
         constraint = request.form.get("constraint", "demographic_parity")
+        wrap_model_flag = request.form.get("wrap_model", "false").lower() in ("1", "true", "yes")
 
         if not target or not sensitive:
             return jsonify({"error": "target and sensitive are required"}), 400
 
         df = pd.read_csv(data_file)
 
-        # load model
+        # Load model using model loader
         try:
-            user_model = joblib.load(model_file)
-        except Exception:
-            import pickle
-            model_file.seek(0)
-            user_model = pickle.load(model_file)
+            user_model, is_dl_model = load_model(model_file, model_file.filename)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": f"Failed to load model: {str(e)}"}), 400
+
+        # Check if DL model
+        if is_dl_model:
+            return jsonify({"error": "Mitigation is not supported for deep-learning models."}), 400
 
         job_id = str(uuid.uuid4())
         PROGRESS[job_id] = {"status": "running", "percent": 0, "message": "queued"}
 
-        def worker(df, user_model, target, sensitive, constraint, job_id):
+        def worker(df, user_model, target, sensitive, constraint, job_id, wrap_model_flag):
             try:
                 PROGRESS[job_id].update({"percent": 5, "message": "starting"})
                 time.sleep(0.1)
+                
+                # Prepare features
+                X = df.drop(columns=[target, sensitive], errors='ignore')
+                
+                # Use model as-is - mitigate_user_model will handle Pipeline extraction
+                user_model_for_mitigation = user_model
+                
                 PROGRESS[job_id].update({"percent": 20, "message": "computing baseline predictions"})
-                res = mitigate_user_model(df, user_model, target, sensitive, constraint=constraint)
+                res = mitigate_user_model(df, user_model_for_mitigation, target, sensitive, constraint=constraint)
 
                 PROGRESS[job_id].update({"percent": 90, "message": "finalizing results"})
-                mitigator = res.pop("mitigator", None)
                 uploaded_model = res.pop("user_model", None)
 
                 model_id = str(uuid.uuid4())
                 model_path = os.path.join(MODEL_DIR, f"{model_id}.joblib")
                 model_metadata = {
-                    "mitigator": mitigator,
                     "original_model": uploaded_model,
                     "target_col": target,
                     "sensitive_col": sensitive,
-                    "constraint": constraint
+                    "constraint": constraint,
+                    "mitigation_type": res.get("mitigation_type")
                 }
                 joblib.dump(model_metadata, model_path)
                 res["model_id"] = model_id
@@ -281,7 +300,7 @@ def mitigate_user_model_async():
                 PROGRESS[job_id].update({"status": "failed", "message": str(e)})
                 RESULTS[job_id] = {"error": str(e)}
 
-        t = Thread(target=worker, args=(df, user_model, target, sensitive, constraint, job_id), daemon=True)
+        t = Thread(target=worker, args=(df, user_model, target, sensitive, constraint, job_id, wrap_model_flag), daemon=True)
         t.start()
 
         return jsonify({"job_id": job_id}), 202
@@ -315,7 +334,7 @@ def mitigate_uploaded_model():
     
     Expects:
     - file: CSV data with target and sensitive columns
-    - user_model: Pre-trained model (.joblib file)
+    - user_model: Pre-trained model (.joblib, .pkl, .onnx, .keras, .pt, .pth, etc.)
     - target: Name of target column
     - sensitive: Name of sensitive attribute column
     - constraint: "demographic_parity" or "equalized_odds"
@@ -331,6 +350,7 @@ def mitigate_uploaded_model():
         target = request.form.get("target")
         sensitive = request.form.get("sensitive")
         constraint = request.form.get("constraint", "demographic_parity")
+        wrap_model_flag = request.form.get("wrap_model", "false").lower() in ("1", "true", "yes")
         
         if not target or not sensitive:
             return jsonify({"error": "target and sensitive are required"}), 400
@@ -338,32 +358,44 @@ def mitigate_uploaded_model():
         # Load data
         df = pd.read_csv(data_file)
         
-        # Load user model
+        # Load user model using the model loader
         try:
-            # If it's a .joblib file
-            user_model = joblib.load(model_file)
-        except Exception:
-            # If it's a .pkl file
-            import pickle
-            model_file.seek(0)
-            user_model = pickle.load(model_file)
+            user_model, is_dl_model = load_model(model_file, model_file.filename)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": f"Failed to load model: {str(e)}"}), 400
+        
+        # DL models don't support mitigation, only analysis
+        if is_dl_model:
+            return jsonify({"error": "Mitigation is not supported for deep-learning models. Use analysis to view fairness metrics only."}), 400
+        
+        # Prepare feature matrix
+        X = df.drop(columns=[target, sensitive], errors='ignore')
+        
+        # Use model as-is - mitigate_user_model will handle Pipeline extraction
+        user_model_for_mitigation = user_model
         
         # Apply mitigation
-        result = mitigate_user_model(df, user_model, target, sensitive, constraint=constraint)
+        try:
+            result = mitigate_user_model(df, user_model_for_mitigation, target, sensitive, constraint=constraint)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": f"Mitigation failed: {str(e)}"}), 400
         
         # Extract non-serializable objects
-        mitigator = result.pop("mitigator")
         uploaded_model = result.pop("user_model")
         
         # Save mitigated model to disk
         model_id = str(uuid.uuid4())
         model_path = os.path.join(MODEL_DIR, f"{model_id}.joblib")
         model_metadata = {
-            "mitigator": mitigator,
             "original_model": uploaded_model,
             "target_col": target,
             "sensitive_col": sensitive,
             "constraint": constraint,
+            "mitigation_type": result.get("mitigation_type"),
             "timestamp": datetime.now().isoformat()
         }
         joblib.dump(model_metadata, model_path)

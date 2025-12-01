@@ -346,17 +346,25 @@ def mitigate_with_exponentiated_gradient(df: pd.DataFrame, target_col: str, sens
 def mitigate_user_model(df: pd.DataFrame, user_model, target_col: str, sensitive_col: str,
                        constraint="demographic_parity"):
     """
-    Applies fairness mitigation to a user-provided pre-trained model.
+    Applies fairness mitigation to a user-provided pre-trained model using POSTPROCESSING.
+    
+    Strategy:
+    - If model is a Pipeline, extract ONLY the final classifier (skip preprocessing)
+    - Apply OUR OWN standard preprocessing to match what the classifier expects
+    - Get predictions from the classifier using our preprocessed features
+    - Apply threshold adjustment per group for fairness
+    
+    This avoids feature name mismatch issues by using our own preprocessing.
     
     Args:
         df: DataFrame with data (must contain target_col and sensitive_col)
-        user_model: Pre-trained classifier with .predict() method
+        user_model: Pre-trained classifier (Pipeline or raw model)
         target_col: Name of target column (ground truth labels)
         sensitive_col: Name of sensitive attribute column
         constraint: "demographic_parity" or "equalized_odds"
     
     Returns:
-        Dict with baseline metrics, mitigated metrics, and mitigator object
+        Dict with baseline metrics, mitigated metrics
     """
     
     # ===============================
@@ -374,9 +382,56 @@ def mitigate_user_model(df: pd.DataFrame, user_model, target_col: str, sensitive
     X = df.drop(columns=[target_col, sensitive_col], errors='ignore')
     
     # ===============================
-    # 3. Get baseline predictions from user model
+    # 3. Extract final classifier from Pipeline if needed
     # ===============================
-    y_pred_baseline = user_model.predict(X)
+    final_model = user_model
+    
+    if isinstance(user_model, Pipeline):
+        # Model is a Pipeline - extract ONLY the final step (classifier)
+        # We'll apply our own preprocessing to avoid feature mismatch
+        steps = user_model.named_steps
+        step_names = list(steps.keys())
+        final_model = steps[step_names[-1]]  # Get the last step (classifier)
+    
+    # ===============================
+    # 4. Apply OUR OWN preprocessing to match typical training setup
+    # ===============================
+    # Build a standard transformer (same as used in baseline training)
+    our_transformer, _, _ = build_transformer(df, target_col, sensitive_col)
+    our_transformer.fit(X)
+    X_transformed = our_transformer.transform(X)
+    
+    # ===============================
+    # 5. Get baseline predictions and scores
+    # ===============================
+    y_scores = None
+    y_pred_baseline = None
+    
+    # Try to get probabilities first
+    try:
+        if hasattr(final_model, 'predict_proba'):
+            y_proba = final_model.predict_proba(X_transformed)
+            if y_proba.ndim == 2 and y_proba.shape[1] >= 2:
+                y_scores = y_proba[:, 1]  # Probability of class 1
+            else:
+                y_scores = y_proba.flatten()
+    except Exception:
+        pass
+    
+    # If no proba, try predictions as scores
+    if y_scores is None:
+        try:
+            y_pred_baseline = final_model.predict(X_transformed)
+            y_scores = np.asarray(y_pred_baseline, dtype=float)
+        except Exception as e_pred:
+            # If still fails, raise detailed error
+            error_msg = f"Failed to get predictions from user model classifier. "
+            error_msg += f"The model may require a different preprocessing approach. "
+            error_msg += f"Error: {str(e_pred)}"
+            raise ValueError(error_msg)
+    
+    # Threshold scores at 0.5 for baseline predictions
+    y_pred_baseline = (y_scores >= 0.5).astype(int)
     
     # Ensure binary encoding
     y_pred_baseline = np.asarray(y_pred_baseline)
@@ -386,7 +441,9 @@ def mitigate_user_model(df: pd.DataFrame, user_model, target_col: str, sensitive
     else:
         y_pred_baseline = y_pred_baseline.astype(int)
     
-    # Compute baseline metrics
+    # ===============================
+    # 4. Compute baseline metrics
+    # ===============================
     tmp_baseline = df.copy()
     tmp_baseline["y_pred_baseline"] = y_pred_baseline
     
@@ -398,48 +455,73 @@ def mitigate_user_model(df: pd.DataFrame, user_model, target_col: str, sensitive
     )
     
     # ===============================
-    # 4. Wrap user model for mitigation
+    # 5. Apply postprocessing mitigation using threshold tuning
     # ===============================
-    class UserModelWrapper(BaseEstimator, ClassifierMixin):
-        """Wraps user's pre-trained model to work with fairlearn."""
-        def __init__(self, model):
-            self.model = model
+    from sklearn.utils import column_or_1d
+    sensitive_col_encoded = column_or_1d(sensitive)
+    
+    # Get unique groups
+    groups = np.unique(sensitive_col_encoded)
+    group_thresholds = {}
+    
+    # For each group, find threshold that improves fairness while maintaining reasonable accuracy
+    y_pred_mitigated = y_pred_baseline.copy()
+    
+    if constraint == "demographic_parity":
+        # Goal: equal selection rates across groups
+        # Strategy: adjust thresholds to equalize positive prediction rates
+        target_pos_rate = np.mean(y_pred_baseline)
         
-        def fit(self, X, y, **fit_params):
-            # User model is already trained; just return self
-            return self
-        
-        def predict(self, X):
-            return self.model.predict(X)
-        
-        def predict_proba(self, X):
-            if hasattr(self.model, 'predict_proba'):
-                return self.model.predict_proba(X)
-            return None
+        for group in groups:
+            group_mask = (sensitive_col_encoded == group)
+            group_scores = y_scores[group_mask]
+            
+            if len(group_scores) > 0:
+                # Find threshold for this group that gives ~target_pos_rate
+                sorted_scores = np.sort(group_scores)[::-1]
+                target_count = max(1, int(len(group_scores) * target_pos_rate))
+                threshold = sorted_scores[min(target_count - 1, len(sorted_scores) - 1)]
+                group_thresholds[group] = threshold
+                y_pred_mitigated[group_mask] = (group_scores >= threshold).astype(int)
     
-    wrapped_model = UserModelWrapper(user_model)
+    else:  # equalized_odds
+        # Goal: equal TPR and FPR across groups
+        # Strategy: find threshold that balances TPR/FPR for each group
+        for group in groups:
+            group_mask = (sensitive_col_encoded == group)
+            group_scores = y_scores[group_mask]
+            group_y_true = y_true[group_mask]
+            
+            if len(group_scores) > 0 and (np.sum(group_y_true) > 0 and np.sum(1 - group_y_true) > 0):
+                # Find threshold that maximizes TPR while keeping FPR reasonable
+                best_threshold = 0.5
+                best_score = -np.inf
+                
+                for th in np.linspace(0, 1, 21):
+                    group_pred = (group_scores >= th).astype(int)
+                    tp = np.sum((group_pred == 1) & (group_y_true == 1))
+                    fp = np.sum((group_pred == 1) & (group_y_true == 0))
+                    fn = np.sum((group_pred == 0) & (group_y_true == 1))
+                    tn = np.sum((group_pred == 0) & (group_y_true == 0))
+                    
+                    tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
+                    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+                    
+                    # Maximize TPR - |TPR - FPR| (balance TPR/FPR)
+                    score = tpr - abs(tpr - fpr)
+                    if score > best_score:
+                        best_score = score
+                        best_threshold = th
+                
+                group_thresholds[group] = best_threshold
+                y_pred_mitigated[group_mask] = (group_scores >= best_threshold).astype(int)
+            else:
+                # If no positive or negative samples in group, use overall threshold
+                group_thresholds[group] = 0.5
     
     # ===============================
-    # 5. Choose constraint and create mitigator
+    # 6. Compute mitigated metrics
     # ===============================
-    cons = DemographicParity() if constraint == "demographic_parity" else EqualizedOdds()
-    
-    mitigator = ExponentiatedGradient(
-        estimator=wrapped_model,
-        constraints=cons
-    )
-    
-    # ===============================
-    # 6. Fit mitigator (learns mixture weights)
-    # ===============================
-    mitigator.fit(X, y_true, sensitive_features=sensitive)
-    
-    # ===============================
-    # 7. Get mitigated predictions
-    # ===============================
-    y_pred_mitigated = mitigator.predict(X)
-    
-    # Compute mitigated metrics
     tmp_mitigated = df.copy()
     tmp_mitigated["y_pred_mitigated"] = y_pred_mitigated
     
@@ -454,8 +536,7 @@ def mitigate_user_model(df: pd.DataFrame, user_model, target_col: str, sensitive
         "predictions": y_pred_mitigated.tolist(),
         "metrics_baseline": metrics_baseline,
         "metrics_after_mitigation": metrics_after,
-        "num_predictors": len(mitigator.predictors_),
-        "weights": [float(w) for w in mitigator.weights_],
-        "mitigator": mitigator,
+        "mitigation_type": "postprocessing_threshold_tuning",
+        "group_thresholds": {str(k): float(v) for k, v in group_thresholds.items()},
         "user_model": user_model
     }

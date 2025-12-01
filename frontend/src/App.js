@@ -13,6 +13,7 @@ function App(){
   const [selectedTarget, setSelectedTarget] = useState(null);
   const [selectedSensitive, setSelectedSensitive] = useState(null);
   const [uploadedModel, setUploadedModel] = useState(null);
+  const [isDLModel, setIsDLModel] = useState(false);
 
   const handleSubmit = async (file, target, sensitive, pred_col, train_baseline=true, modelFile=null, wrapModel=false) => {
     setUploadedFile(file);
@@ -22,6 +23,7 @@ function App(){
     setStep(2);
     const res = await analyzeDataset(file, target, sensitive, pred_col, train_baseline, modelFile, wrapModel);
     setResults(res);
+    setIsDLModel(res.is_dl_model || false); // Track if model is deep learning
     setStep(3);
   };
 
@@ -36,7 +38,7 @@ function App(){
           <>
             <ReportPage results={results} />
             <div className="mt-6">
-              <MitigationPage uploadedFile={uploadedFile} selectedTarget={selectedTarget} selectedSensitive={selectedSensitive} uploadedModel={uploadedModel} />
+              <MitigationPage uploadedFile={uploadedFile} selectedTarget={selectedTarget} selectedSensitive={selectedSensitive} uploadedModel={uploadedModel} isDLModel={isDLModel} />
             </div>
           </>
         )}

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { mitigateDataset, mitigateUserModel, mitigateDatasetAsync, mitigateUserModelAsync, getProgress, getResult } from "../utils/api";
 
-const MitigationPage = ({ uploadedFile, selectedTarget, selectedSensitive, uploadedModel }) => {
+const MitigationPage = ({ uploadedFile, selectedTarget, selectedSensitive, uploadedModel, isDLModel }) => {
   const [file, setFile] = useState(uploadedFile || null);
   const [userModel, setUserModel] = useState(uploadedModel || null);
   const [target, setTarget] = useState(selectedTarget || "");
@@ -159,9 +159,18 @@ const MitigationPage = ({ uploadedFile, selectedTarget, selectedSensitive, uploa
         )}
       </div>
 
-      <button onClick={run} disabled={loading} className="bg-green-600 text-white px-6 py-2 rounded font-semibold hover:bg-green-700 disabled:opacity-50">
-        {loading ? "Running mitigation..." : "Run Mitigation"}
+      <button onClick={run} disabled={loading || isDLModel} className="bg-green-600 text-white px-6 py-2 rounded font-semibold hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed">
+        {isDLModel ? "Mitigation not supported for deep-learning models" : loading ? "Running mitigation..." : "Run Mitigation"}
       </button>
+
+      {isDLModel && (
+        <div className="mt-3 p-3 bg-yellow-100 border border-yellow-400 text-yellow-800 rounded">
+          <p className="text-sm">
+            <strong>Note:</strong> Mitigation is not currently supported for deep-learning models (ONNX, Keras, PyTorch). 
+            You can view the fairness analysis metrics above, but automated mitigation is available for scikit-learn and similar ML models only.
+          </p>
+        </div>
+      )}
 
       {loading && (
         <div className="mt-4">
