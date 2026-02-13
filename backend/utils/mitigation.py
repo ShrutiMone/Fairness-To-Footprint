@@ -11,9 +11,12 @@ import pandas as pd
 import numpy as np
 
 from .fairness_metrics import compute_fairness_metrics
+from .fairness_metrics import compute_performance_metrics
 from sklearn.base import BaseEstimator, ClassifierMixin, TransformerMixin
+from sklearn.model_selection import train_test_split
 import warnings
 from sklearn.exceptions import ConvergenceWarning
+from typing import Optional
 # Suppress scikit-learn ConvergenceWarning messages that are expected
 warnings.filterwarnings('ignore', category=ConvergenceWarning)
 
@@ -61,6 +64,120 @@ class PipelineSampleWeightAdapter(BaseEstimator, ClassifierMixin):
         if pipeline_params:
             self.pipeline.set_params(**pipeline_params)
         return self
+
+
+class MitigatedBaselineWrapper(BaseEstimator, ClassifierMixin):
+    """
+    Wraps a Fairlearn ExponentiatedGradient mitigator into a predictable model
+    that can be re-uploaded and used in analysis.
+    """
+    def __init__(self, mitigator, target_col: str, sensitive_col: str, metadata: Optional[dict] = None):
+        self.mitigator = mitigator
+        self.target_col = target_col
+        self.sensitive_col = sensitive_col
+        self.metadata = metadata or {}
+
+    def predict(self, X):
+        # X should be feature matrix without target/sensitive columns.
+        return self.mitigator.predict(X)
+
+    @staticmethod
+    def from_saved_dict(d: dict):
+        return MitigatedBaselineWrapper(
+            mitigator=d.get("mitigator"),
+            target_col=d.get("target_col"),
+            sensitive_col=d.get("sensitive_col"),
+            metadata={k: v for k, v in d.items() if k not in ("mitigator", "transformer", "label_encoder")}
+        )
+
+
+class MitigatedUserModelWrapper(BaseEstimator, ClassifierMixin):
+    """
+    Wraps a user model with stored preprocessing + group thresholds so it can
+    be re-uploaded and used for fairness analysis.
+    """
+    def __init__(
+        self,
+        final_model,
+        transformer,
+        group_thresholds: dict,
+        sensitive_col: str,
+        target_col: Optional[str] = None,
+        default_threshold: float = 0.5,
+        constraint: str = "demographic_parity",
+        metadata: Optional[dict] = None,
+    ):
+        self.final_model = final_model
+        self.transformer = transformer
+        self.group_thresholds = {str(k): float(v) for k, v in (group_thresholds or {}).items()}
+        self.sensitive_col = sensitive_col
+        self.target_col = target_col
+        self.default_threshold = float(default_threshold)
+        self.constraint = constraint
+        self.metadata = metadata or {}
+
+    def _scores(self, X_transformed):
+        y_scores = None
+        if hasattr(self.final_model, "predict_proba"):
+            try:
+                y_proba = self.final_model.predict_proba(X_transformed)
+                if y_proba.ndim == 2 and y_proba.shape[1] >= 2:
+                    y_scores = y_proba[:, 1]
+                else:
+                    y_scores = y_proba.flatten()
+            except Exception:
+                y_scores = None
+        if y_scores is None:
+            y_pred = self.final_model.predict(X_transformed)
+            y_scores = np.asarray(y_pred, dtype=float).flatten()
+        return y_scores
+
+    def predict_with_sensitive(self, df: pd.DataFrame, target_col: Optional[str] = None, sensitive_col: Optional[str] = None):
+        if not hasattr(df, "columns"):
+            raise ValueError("predict_with_sensitive expects a pandas DataFrame with columns.")
+
+        sens_col = sensitive_col or self.sensitive_col
+        if not sens_col:
+            raise ValueError("Sensitive column is required for mitigated user-model predictions.")
+        if sens_col not in df.columns:
+            raise ValueError(f"Sensitive column '{sens_col}' not found in input data.")
+
+        X = df.copy()
+        tcol = target_col or self.target_col
+        if tcol and tcol in X.columns:
+            X = X.drop(columns=[tcol], errors="ignore")
+        sensitive = X[sens_col].values
+        X = X.drop(columns=[sens_col], errors="ignore")
+
+        X_t = self.transformer.transform(X)
+        scores = self._scores(X_t)
+
+        preds = np.zeros(len(scores), dtype=int)
+        groups = np.unique(sensitive)
+        for g in groups:
+            mask = sensitive == g
+            th = self.group_thresholds.get(str(g), self.default_threshold)
+            preds[mask] = (scores[mask] >= th).astype(int)
+        return preds
+
+    def predict(self, X):
+        # If DataFrame with sensitive column, use it directly.
+        if hasattr(X, "columns") and self.sensitive_col in X.columns:
+            return self.predict_with_sensitive(X, sensitive_col=self.sensitive_col, target_col=self.target_col)
+        raise ValueError("Sensitive column required for mitigated user-model predictions. Use predict_with_sensitive(df).")
+
+    @staticmethod
+    def from_saved_dict(d: dict):
+        return MitigatedUserModelWrapper(
+            final_model=d.get("final_model"),
+            transformer=d.get("transformer"),
+            group_thresholds=d.get("group_thresholds") or {},
+            sensitive_col=d.get("sensitive_col"),
+            target_col=d.get("target_col"),
+            default_threshold=d.get("default_threshold", 0.5),
+            constraint=d.get("constraint", "demographic_parity"),
+            metadata={k: v for k, v in d.items() if k not in ("final_model", "transformer", "group_thresholds")}
+        )
 
 
 def _prepare_features(df: pd.DataFrame, target_col: str, sensitive_col: str):
@@ -138,16 +255,32 @@ def train_baseline_only(df: pd.DataFrame, target_col: str, sensitive_col: str):
 
     X = df.drop(columns=[target_col], errors='ignore')
     X = X.drop(columns=[sensitive_col], errors='ignore')
+    y_raw = df[target_col]
+    sens_raw = df[sensitive_col] if sensitive_col in df.columns else None
+
+    # Holdout split for more honest metrics
+    try:
+        X_train, X_test, y_train, y_test, sens_train, sens_test = train_test_split(
+            X, y, sens_raw, test_size=0.2, random_state=42, stratify=y
+        )
+    except Exception:
+        # Fallback if stratify fails (e.g., tiny classes)
+        X_train, X_test, y_train, y_test, sens_train, sens_test = train_test_split(
+            X, y, sens_raw, test_size=0.2, random_state=42
+        )
 
     clf_pipeline = Pipeline(steps=[
         ("pre", transformer),
         ("clf", base_clf)
     ])
 
-    clf_pipeline.fit(X, y)
-    y_pred_baseline = clf_pipeline.predict(X)
+    clf_pipeline.fit(X_train, y_train)
+    y_pred_baseline = clf_pipeline.predict(X_train)
 
-    tmp_baseline = df.copy()
+    tmp_baseline = pd.DataFrame(X_train).copy()
+    tmp_baseline[target_col] = y_train
+    if sens_train is not None:
+        tmp_baseline[sensitive_col] = sens_train
     tmp_baseline["y_pred_baseline"] = y_pred_baseline
 
     metrics_baseline = compute_fairness_metrics(
@@ -156,10 +289,32 @@ def train_baseline_only(df: pd.DataFrame, target_col: str, sensitive_col: str):
         sensitive_col=sensitive_col,
         pred_col="y_pred_baseline"
     )
+    performance_baseline = compute_performance_metrics(y_train, y_pred_baseline)
+    # Test/holdout metrics
+    metrics_baseline_test = None
+    if X_test is not None and len(X_test) > 0:
+        y_pred_test = clf_pipeline.predict(X_test)
+        tmp_test = pd.DataFrame(X_test).copy()
+        tmp_test[target_col] = y_test
+        if sens_test is not None:
+            tmp_test[sensitive_col] = sens_test
+        tmp_test["y_pred_baseline"] = y_pred_test
+        metrics_baseline_test = compute_fairness_metrics(
+            tmp_test,
+            target_col=target_col,
+            sensitive_col=sensitive_col,
+            pred_col="y_pred_baseline"
+        )
+        performance_baseline_test = compute_performance_metrics(y_test, y_pred_test)
+    else:
+        performance_baseline_test = None
 
     return {
         "predictions": y_pred_baseline.tolist(),
         "metrics_baseline": metrics_baseline,
+        "metrics_baseline_test": metrics_baseline_test,
+        "performance_baseline": performance_baseline,
+        "performance_baseline_test": performance_baseline_test,
         "transformer": transformer,
         "label_encoder": le,
         "strategy": strategy,
@@ -289,21 +444,33 @@ def mitigate_with_exponentiated_gradient(df: pd.DataFrame, target_col: str, sens
     # ===============================
     # 4. Fit baseline pipeline for pre-mitigation metrics
     # ===============================
-    clf_pipeline.fit(X, y)
-    y_pred_baseline = clf_pipeline.predict(X)
+    # Holdout split for reporting
+    try:
+        X_train, X_test, y_train, y_test, sens_train, sens_test = train_test_split(
+            X, y, sensitive, test_size=0.2, random_state=42, stratify=y
+        )
+    except Exception:
+        X_train, X_test, y_train, y_test, sens_train, sens_test = train_test_split(
+            X, y, sensitive, test_size=0.2, random_state=42
+        )
+
+    clf_pipeline.fit(X_train, y_train)
+    y_pred_baseline = clf_pipeline.predict(X_train)
 
     # ===============================
     # 5. Fit mitigator
     # ===============================
-    mitigator.fit(X, y, sensitive_features=sensitive)
+    mitigator.fit(X_train, y_train, sensitive_features=sens_train)
 
     # Predict
-    y_pred_mitigated = mitigator.predict(X)
+    y_pred_mitigated = mitigator.predict(X_train)
 
     # ===============================
     # 6. Compute baseline (pre-mitigation) metrics
     # ===============================
-    tmp_baseline = df.copy()
+    tmp_baseline = pd.DataFrame(X_train).copy()
+    tmp_baseline[target_col] = y_train
+    tmp_baseline[sensitive_col] = sens_train
     tmp_baseline["y_pred_baseline"] = y_pred_baseline
 
     metrics_baseline = compute_fairness_metrics(
@@ -316,7 +483,9 @@ def mitigate_with_exponentiated_gradient(df: pd.DataFrame, target_col: str, sens
     # ===============================
     # 6. Build temp DF for mitigation metric evaluation
     # ===============================
-    tmp = df.copy()
+    tmp = pd.DataFrame(X_train).copy()
+    tmp[target_col] = y_train
+    tmp[sensitive_col] = sens_train
     tmp["y_pred_mitigated"] = y_pred_mitigated
 
     # ===============================
@@ -328,11 +497,44 @@ def mitigate_with_exponentiated_gradient(df: pd.DataFrame, target_col: str, sens
         sensitive_col=sensitive_col,
         pred_col="y_pred_mitigated"
     )
+    performance_baseline = compute_performance_metrics(y_train, y_pred_baseline)
+    performance_after = compute_performance_metrics(y_train, y_pred_mitigated)
+    # Holdout metrics
+    metrics_baseline_test = None
+    metrics_after_test = None
+    if X_test is not None and len(X_test) > 0:
+        y_pred_baseline_test = clf_pipeline.predict(X_test)
+        y_pred_mitigated_test = mitigator.predict(X_test)
+        tmp_b_test = pd.DataFrame(X_test).copy()
+        tmp_b_test[target_col] = y_test
+        tmp_b_test[sensitive_col] = sens_test
+        tmp_b_test["y_pred_baseline"] = y_pred_baseline_test
+        metrics_baseline_test = compute_fairness_metrics(
+            tmp_b_test, target_col=target_col, sensitive_col=sensitive_col, pred_col="y_pred_baseline"
+        )
+        tmp_m_test = pd.DataFrame(X_test).copy()
+        tmp_m_test[target_col] = y_test
+        tmp_m_test[sensitive_col] = sens_test
+        tmp_m_test["y_pred_mitigated"] = y_pred_mitigated_test
+        metrics_after_test = compute_fairness_metrics(
+            tmp_m_test, target_col=target_col, sensitive_col=sensitive_col, pred_col="y_pred_mitigated"
+        )
+        performance_baseline_test = compute_performance_metrics(y_test, y_pred_baseline_test)
+        performance_after_test = compute_performance_metrics(y_test, y_pred_mitigated_test)
+    else:
+        performance_baseline_test = None
+        performance_after_test = None
 
     return {
         "predictions": y_pred_mitigated.tolist(),
         "metrics_baseline": metrics_baseline,
         "metrics_after_mitigation": metrics_after,
+        "metrics_baseline_test": metrics_baseline_test,
+        "metrics_after_mitigation_test": metrics_after_test,
+        "performance_baseline": performance_baseline,
+        "performance_after_mitigation": performance_after,
+        "performance_baseline_test": performance_baseline_test,
+        "performance_after_mitigation_test": performance_after_test,
         "num_predictors": len(mitigator.predictors_),
         "weights": [float(w) for w in mitigator.weights_],
         "mitigator": mitigator,
@@ -380,26 +582,64 @@ def mitigate_user_model(df: pd.DataFrame, user_model, target_col: str, sensitive
     # 2. Prepare feature matrix X
     # ===============================
     X = df.drop(columns=[target_col, sensitive_col], errors='ignore')
+
+    # Guard: mitigated user models are tied to a specific sensitive attribute
+    if isinstance(user_model, MitigatedUserModelWrapper):
+        if user_model.sensitive_col and user_model.sensitive_col != sensitive_col:
+            raise ValueError(
+                f"Uploaded mitigated model was created with sensitive column '{user_model.sensitive_col}'. "
+                f"Please use the same sensitive column."
+            )
     
+    def _is_pipeline(m):
+        return isinstance(m, Pipeline) or hasattr(m, "named_steps")
+
     # ===============================
     # 3. Extract final classifier from Pipeline if needed
     # ===============================
     final_model = user_model
-    
-    if isinstance(user_model, Pipeline):
+    transformer_used = None
+
+    # If already a mitigated wrapper, reuse its stored transformer when appropriate
+    if isinstance(user_model, MitigatedUserModelWrapper):
+        final_model = user_model.final_model
+        transformer_used = user_model.transformer
+    elif isinstance(user_model, Pipeline):
         # Model is a Pipeline - extract ONLY the final step (classifier)
         # We'll apply our own preprocessing to avoid feature mismatch
         steps = user_model.named_steps
         step_names = list(steps.keys())
         final_model = steps[step_names[-1]]  # Get the last step (classifier)
-    
+
     # ===============================
-    # 4. Apply OUR OWN preprocessing to match typical training setup
+    # 4. Preprocess features (only if final_model is not a Pipeline)
     # ===============================
-    # Build a standard transformer (same as used in baseline training)
-    our_transformer, _, _ = build_transformer(df, target_col, sensitive_col)
-    our_transformer.fit(X)
-    X_transformed = our_transformer.transform(X)
+    if _is_pipeline(final_model):
+        X_transformed = X  # pipeline will handle preprocessing internally
+    else:
+        # If model expects already-encoded features, skip preprocessing
+        fm_expected = getattr(final_model, "n_features_in_", None)
+        if fm_expected is not None and X.shape[1] == fm_expected:
+            X_transformed = X
+            transformer_used = None
+        else:
+            if transformer_used is None:
+                # Build a standard transformer (same as used in baseline training)
+                transformer_used, _, _ = build_transformer(df, target_col, sensitive_col)
+                transformer_used.fit(X)
+
+            expected = None
+            if hasattr(transformer_used, "n_features_in_"):
+                expected = transformer_used.n_features_in_
+            elif hasattr(transformer_used, "feature_names_in_"):
+                expected = len(transformer_used.feature_names_in_)
+
+            if expected is not None and X.shape[1] != expected:
+                raise ValueError(
+                    f"Input has {X.shape[1]} features, but preprocessing expects {expected}. "
+                    f"Use the original (non-preprocessed) dataset or a model that matches these features."
+                )
+            X_transformed = transformer_used.transform(X)
     
     # ===============================
     # 5. Get baseline predictions and scores
@@ -531,12 +771,97 @@ def mitigate_user_model(df: pd.DataFrame, user_model, target_col: str, sensitive
         sensitive_col=sensitive_col,
         pred_col="y_pred_mitigated"
     )
+    performance_baseline = compute_performance_metrics(y_true, y_pred_baseline)
+    performance_after = compute_performance_metrics(y_true, y_pred_mitigated)
     
+    # Holdout metrics for user model
+    metrics_baseline_test = None
+    metrics_after_test = None
+    if X is not None and len(X) > 1:
+        try:
+            X_train, X_test, y_train, y_test, sens_train, sens_test = train_test_split(
+                X, y_true, sensitive, test_size=0.2, random_state=42, stratify=y_true
+            )
+        except Exception:
+            X_train, X_test, y_train, y_test, sens_train, sens_test = train_test_split(
+                X, y_true, sensitive, test_size=0.2, random_state=42
+            )
+        # Recompute predictions on holdout using same flow
+        if _is_pipeline(final_model):
+            y_scores_test = None
+            if hasattr(final_model, "predict_proba"):
+                try:
+                    y_proba = final_model.predict_proba(X_test)
+                    if y_proba.ndim == 2 and y_proba.shape[1] >= 2:
+                        y_scores_test = y_proba[:, 1]
+                    else:
+                        y_scores_test = y_proba.flatten()
+                except Exception:
+                    y_scores_test = None
+            if y_scores_test is None:
+                y_scores_test = final_model.predict(X_test)
+            y_pred_test = (np.asarray(y_scores_test, dtype=float) >= 0.5).astype(int)
+        else:
+            if transformer_used is not None:
+                X_test_t = transformer_used.transform(X_test)
+            else:
+                X_test_t = X_test
+            y_scores_test = None
+            if hasattr(final_model, "predict_proba"):
+                try:
+                    y_proba = final_model.predict_proba(X_test_t)
+                    if y_proba.ndim == 2 and y_proba.shape[1] >= 2:
+                        y_scores_test = y_proba[:, 1]
+                    else:
+                        y_scores_test = y_proba.flatten()
+                except Exception:
+                    y_scores_test = None
+            if y_scores_test is None:
+                y_scores_test = final_model.predict(X_test_t)
+            y_pred_test = (np.asarray(y_scores_test, dtype=float) >= 0.5).astype(int)
+
+        tmp_b_test = pd.DataFrame(X_test).copy()
+        tmp_b_test[target_col] = y_test
+        tmp_b_test[sensitive_col] = sens_test
+        tmp_b_test["y_pred_baseline"] = y_pred_test
+        metrics_baseline_test = compute_fairness_metrics(
+            tmp_b_test, target_col=target_col, sensitive_col=sensitive_col, pred_col="y_pred_baseline"
+        )
+
+        # Apply thresholds per group for mitigated test predictions
+        preds_test = np.zeros(len(y_scores_test), dtype=int)
+        groups_test = np.unique(sens_test)
+        for g in groups_test:
+            mask = sens_test == g
+            th = group_thresholds.get(str(g), 0.5)
+            preds_test[mask] = (np.asarray(y_scores_test, dtype=float)[mask] >= th).astype(int)
+
+        tmp_m_test = pd.DataFrame(X_test).copy()
+        tmp_m_test[target_col] = y_test
+        tmp_m_test[sensitive_col] = sens_test
+        tmp_m_test["y_pred_mitigated"] = preds_test
+        metrics_after_test = compute_fairness_metrics(
+            tmp_m_test, target_col=target_col, sensitive_col=sensitive_col, pred_col="y_pred_mitigated"
+        )
+        performance_baseline_test = compute_performance_metrics(y_test, y_pred_test)
+        performance_after_test = compute_performance_metrics(y_test, preds_test)
+    else:
+        performance_baseline_test = None
+        performance_after_test = None
+
     return {
         "predictions": y_pred_mitigated.tolist(),
         "metrics_baseline": metrics_baseline,
         "metrics_after_mitigation": metrics_after,
+        "metrics_baseline_test": metrics_baseline_test,
+        "metrics_after_mitigation_test": metrics_after_test,
+        "performance_baseline": performance_baseline,
+        "performance_after_mitigation": performance_after,
+        "performance_baseline_test": performance_baseline_test,
+        "performance_after_mitigation_test": performance_after_test,
         "mitigation_type": "postprocessing_threshold_tuning",
         "group_thresholds": {str(k): float(v) for k, v in group_thresholds.items()},
-        "user_model": user_model
+        "user_model": user_model,
+        "final_model": final_model,
+        "transformer": transformer_used
     }

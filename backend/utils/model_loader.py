@@ -34,6 +34,18 @@ def load_model(file_obj, filename):
     if ext == '.joblib':
         try:
             model = joblib.load(file_obj)
+            # Handle legacy saved dicts from older mitigation downloads
+            if isinstance(model, dict):
+                try:
+                    from utils.mitigation import MitigatedBaselineWrapper, MitigatedUserModelWrapper
+                except Exception:
+                    from .mitigation import MitigatedBaselineWrapper, MitigatedUserModelWrapper
+
+                if "mitigator" in model:
+                    return MitigatedBaselineWrapper.from_saved_dict(model), False
+                if "group_thresholds" in model and "final_model" in model and "transformer" in model:
+                    return MitigatedUserModelWrapper.from_saved_dict(model), False
+                raise ValueError("Uploaded .joblib is a metadata dict, not a model. Downloaded mitigated files from older versions are not directly uploadable.")
             return model, False
         except Exception as e:
             raise ValueError(f"Failed to load .joblib file: {str(e)}")

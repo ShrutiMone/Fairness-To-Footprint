@@ -1,4 +1,6 @@
-def generate_user_specific_suggestions(df, metrics, target_col, sensitive_col):
+def generate_user_specific_suggestions(df, metrics, target_col, sensitive_col,
+                                       dp_threshold=0.1, eo_threshold=0.1,
+                                       fpr_threshold=0.1, fnr_threshold=0.1):
     """
     Generate tailored suggestions for dataset/model improvements based on metrics and dataset properties.
     Args:
@@ -17,11 +19,11 @@ def generate_user_specific_suggestions(df, metrics, target_col, sensitive_col):
     fnr_diff = overall.get("False Negative Rate Difference", 0)
 
     # Fairness metric thresholds
-    if abs(dp_diff) > 0.1:
+    if abs(dp_diff) > dp_threshold:
         suggestions.append(f"Demographic Parity Difference is {dp_diff:.4f}. Consider balancing sensitive groups or applying fairness mitigation.")
-    if abs(eo_diff) > 0.1:
+    if abs(eo_diff) > eo_threshold:
         suggestions.append(f"Equalized Odds Difference is {eo_diff:.4f}. Consider collecting more data for underrepresented groups or using fairness-aware algorithms.")
-    if abs(fpr_diff) > 0.1 or abs(fnr_diff) > 0.1:
+    if abs(fpr_diff) > fpr_threshold or abs(fnr_diff) > fnr_threshold:
         suggestions.append("False positive/negative rate differences are high between groups. Review feature selection and data balance.")
 
     # Class balance
@@ -58,6 +60,7 @@ from fairlearn.metrics import (
 )
 from fairlearn.metrics import selection_rate
 from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import numpy as np
 import pandas as pd
 
@@ -137,3 +140,53 @@ def compute_fairness_metrics(df: pd.DataFrame, target_col: str, sensitive_col: s
         return {"overall": overall, "by_group": by_group}
     except Exception as e:
         return {"error": str(e)}
+
+
+def compute_performance_metrics(y_true, y_pred):
+    """
+    Compute simple performance metrics for binary classification.
+    Returns a dict with accuracy, precision, recall, f1.
+    """
+    try:
+        y_true = _ensure_binary(y_true)
+        y_pred = _ensure_binary(y_pred)
+        return {
+            "Accuracy": round(float(accuracy_score(y_true, y_pred)), 4),
+            "Precision": round(float(precision_score(y_true, y_pred, zero_division=0)), 4),
+            "Recall": round(float(recall_score(y_true, y_pred, zero_division=0)), 4),
+            "F1": round(float(f1_score(y_true, y_pred, zero_division=0)), 4),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def analyze_data_quality(df: pd.DataFrame, target_col: str, sensitive_col: str):
+    """
+    Basic dataset quality diagnostics.
+    """
+    out = {}
+    try:
+        out["num_rows"] = int(df.shape[0])
+        out["num_columns"] = int(df.shape[1])
+
+        # Missing values
+        missing = df.isnull().sum()
+        missing_cols = missing[missing > 0]
+        out["missing_columns"] = {str(k): int(v) for k, v in missing_cols.items()}
+
+        # Duplicates
+        out["duplicate_rows"] = int(df.duplicated().sum())
+
+        # Target balance
+        if target_col in df.columns:
+            vc = df[target_col].value_counts(dropna=False)
+            out["target_distribution"] = {str(k): int(v) for k, v in vc.items()}
+
+        # Sensitive balance
+        if sensitive_col in df.columns:
+            vc = df[sensitive_col].value_counts(dropna=False)
+            out["sensitive_distribution"] = {str(k): int(v) for k, v in vc.items()}
+
+    except Exception as e:
+        out["error"] = str(e)
+    return out

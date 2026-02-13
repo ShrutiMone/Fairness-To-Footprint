@@ -17,6 +17,7 @@ const MitigationPage = ({ uploadedFile, selectedTarget, selectedSensitive, uploa
     }
   }, [uploadedFile, selectedTarget, selectedSensitive, uploadedModel]);
   const [constraint, setConstraint] = useState("demographic_parity");
+  const [perfPreference, setPerfPreference] = useState("precision");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [jobPercent, setJobPercent] = useState(0);
@@ -82,6 +83,12 @@ const MitigationPage = ({ uploadedFile, selectedTarget, selectedSensitive, uploa
   // Derived view data for nicer rendering
   const overallBaseline = result?.metrics_baseline?.overall || {};
   const overall = result?.metrics_after_mitigation?.overall || {};
+  const overallBaselineTest = result?.metrics_baseline_test?.overall || {};
+  const overallTest = result?.metrics_after_mitigation_test?.overall || {};
+  const perfBaseline = result?.performance_baseline || {};
+  const perfAfter = result?.performance_after_mitigation || {};
+  const perfBaselineTest = result?.performance_baseline_test || {};
+  const perfAfterTest = result?.performance_after_mitigation_test || {};
   const byGroupBaseline = result?.metrics_baseline?.by_group || {};
   const byGroup = result?.metrics_after_mitigation?.by_group || {};
   const suggestions = result?.suggestions || [];
@@ -124,6 +131,22 @@ const MitigationPage = ({ uploadedFile, selectedTarget, selectedSensitive, uploa
             <option value="demographic_parity">Demographic Parity (equal selection rates)</option>
             <option value="equalized_odds">Equalized Odds (equal error rates)</option>
           </select>
+        </div>
+        <div>
+          <label className="block text-sm font-semibold mb-2">Optimize for:</label>
+          <div className="flex gap-4 text-sm">
+            <label className="flex items-center">
+              <input type="radio" name="perfPref" value="precision" checked={perfPreference === "precision"} onChange={(e)=>setPerfPreference(e.target.value)} className="mr-2" />
+              Precision
+            </label>
+            <label className="flex items-center">
+              <input type="radio" name="perfPref" value="recall" checked={perfPreference === "recall"} onChange={(e)=>setPerfPreference(e.target.value)} className="mr-2" />
+              Recall
+            </label>
+          </div>
+          <div className="text-xs text-gray-600 mt-1">
+            This only affects how you interpret results today. It does not change the mitigation algorithm yet.
+          </div>
         </div>
       </div>
       
@@ -253,6 +276,94 @@ const MitigationPage = ({ uploadedFile, selectedTarget, selectedSensitive, uploa
                   </ul>
                 </div>
               </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                <div className="bg-white border rounded p-4 shadow-sm">
+                  <h5 className="font-semibold mb-2">Performance (Before)</h5>
+                  <ul className="text-sm space-y-1">
+                    {Object.entries(perfBaseline).length === 0 && <li className="text-gray-500">No performance metrics</li>}
+                    {Object.entries(perfBaseline).map(([k, v]) => (
+                      <li key={k} className={`flex justify-between ${(perfPreference === "precision" && k === "Precision") || (perfPreference === "recall" && k === "Recall") ? "font-semibold text-green-700" : ""}`}>
+                        <span className="text-gray-700">{k}:</span>
+                        <span className="font-medium">{fmt(v)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="bg-white border rounded p-4 shadow-sm">
+                  <h5 className="font-semibold mb-2">Performance (After)</h5>
+                  <ul className="text-sm space-y-1">
+                    {Object.entries(perfAfter).length === 0 && <li className="text-gray-500">No performance metrics</li>}
+                    {Object.entries(perfAfter).map(([k, v]) => (
+                      <li key={k} className={`flex justify-between ${(perfPreference === "precision" && k === "Precision") || (perfPreference === "recall" && k === "Recall") ? "font-semibold text-green-700" : ""}`}>
+                        <span className="text-gray-700">{k}:</span>
+                        <span className="font-medium">{fmt(v)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              {(Object.keys(overallBaselineTest).length > 0 || Object.keys(overallTest).length > 0) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                  <div className="bg-white border rounded p-4 shadow-sm">
+                    <h5 className="font-semibold mb-2">Holdout Fairness (Before)</h5>
+                    <ul className="text-sm space-y-1">
+                      {Object.entries(overallBaselineTest).length === 0 && <li className="text-gray-500">No holdout metrics</li>}
+                      {Object.entries(overallBaselineTest).map(([k, v]) => (
+                        <li key={k} className="flex justify-between">
+                          <span className="text-gray-700">{k}:</span>
+                          <span className="font-medium">{fmt(v)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="bg-white border rounded p-4 shadow-sm">
+                    <h5 className="font-semibold mb-2">Holdout Fairness (After)</h5>
+                    <ul className="text-sm space-y-1">
+                      {Object.entries(overallTest).length === 0 && <li className="text-gray-500">No holdout metrics</li>}
+                      {Object.entries(overallTest).map(([k, v]) => (
+                        <li key={k} className="flex justify-between">
+                          <span className="text-gray-700">{k}:</span>
+                          <span className="font-medium">{fmt(v)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              {(Object.keys(perfBaselineTest).length > 0 || Object.keys(perfAfterTest).length > 0) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                  <div className="bg-white border rounded p-4 shadow-sm">
+                    <h5 className="font-semibold mb-2">Holdout Performance (Before)</h5>
+                    <ul className="text-sm space-y-1">
+                      {Object.entries(perfBaselineTest).length === 0 && <li className="text-gray-500">No holdout metrics</li>}
+                      {Object.entries(perfBaselineTest).map(([k, v]) => (
+                        <li key={k} className="flex justify-between">
+                          <span className="text-gray-700">{k}:</span>
+                          <span className="font-medium">{fmt(v)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="bg-white border rounded p-4 shadow-sm">
+                    <h5 className="font-semibold mb-2">Holdout Performance (After)</h5>
+                    <ul className="text-sm space-y-1">
+                      {Object.entries(perfAfterTest).length === 0 && <li className="text-gray-500">No holdout metrics</li>}
+                      {Object.entries(perfAfterTest).map(([k, v]) => (
+                        <li key={k} className="flex justify-between">
+                          <span className="text-gray-700">{k}:</span>
+                          <span className="font-medium">{fmt(v)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                 <div className="bg-white border rounded p-4 shadow-sm">
