@@ -3,4 +3,47 @@
 @tailwind utilities;
 
 /* small custom styles */
-body { @apply bg-gray-50; }
+/* body { @apply bg-gray-50; } */
+
+:root {
+  --bg:        #0c0e12;
+  --surface:   #141821;
+  --surfaceHi: #1c2030;
+  --border:    #2a2f3d;
+  --text:      #c8cdd8;
+  --textDim:   #6b7280;
+  --amber:     #f59e0b;
+  --red:       #ef4444;
+  --green:     #22c55e;
+  --sky:       #38bdf8;
+  --violet:    #a78bfa;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Geist', 'SF Mono', system-ui, sans-serif;
+  margin: 0;
+}
+
+/* Scrollbar styling to match dark theme */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--surface); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--textDim); }
+
+/* Override CRA default white background */
+#root { min-height: 100vh; background: var(--bg); }
+
+code {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.88em;
+  background: #1c2030;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--sky);
+}
+
+

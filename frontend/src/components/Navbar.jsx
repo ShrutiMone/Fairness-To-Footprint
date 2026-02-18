@@ -1,17 +1,69 @@
 import React from "react";
+import { T } from "../theme";
 
 const Navbar = () => (
-  <nav className="bg-gradient-to-r from-sky-600 to-indigo-600 text-white shadow">
-    <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-      <div className="flex items-center space-x-3">
-        <div className="bg-white rounded-full p-1 text-indigo-600 font-bold">AI</div>
-        <h1 className="text-lg font-semibold">FairCheck AI</h1>
+  <nav style={{
+    background: T.surface,
+    borderBottom: `1px solid ${T.border}`,
+    fontFamily: T.font,
+  }}>
+    <div style={{
+      maxWidth: 1200,
+      margin: "0 auto",
+      padding: "0 32px",
+      height: 52,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+    }}>
+      {/* Logo + Title */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{
+          width: 28, height: 28, borderRadius: 7,
+          background: `linear-gradient(135deg, ${T.amber}, #e07b00)`,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 14, fontWeight: 900, color: "#000",
+        }}>
+          ⚖
+        </div>
+        <span style={{ color: "#fff", fontSize: 16, fontWeight: 800, letterSpacing: "-0.02em" }}>
+          FairCheck <span style={{ color: T.amber }}>AI</span>
+        </span>
+        <span style={{
+          fontSize: 10, fontWeight: 700, letterSpacing: "0.08em",
+          textTransform: "uppercase", color: T.textDim,
+          borderLeft: `1px solid ${T.border}`, paddingLeft: 10, marginLeft: 2,
+        }}>
+          Fairness Audit System
+        </span>
       </div>
-      <div className="flex items-center space-x-6 text-sm">
-        <a href="#upload" className="hover:underline">Upload</a>
-        <a href="#report" className="hover:underline">Report</a>
-        <a href="#mitigation" className="hover:underline">Mitigation</a>
-        <a href="https://github.com" className="hover:underline">GitHub</a>
+
+      {/* Nav links */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {[
+          { label: "Upload", href: "#upload" },
+          { label: "Report", href: "#report" },
+          { label: "Mitigation", href: "#mitigation" },
+          { label: "GitHub", href: "https://github.com" },
+        ].map(({ label, href }) => (
+          <a
+            key={label}
+            href={href}
+            style={{
+              color: T.textDim,
+              fontSize: 13,
+              fontWeight: 600,
+              textDecoration: "none",
+              padding: "5px 11px",
+              borderRadius: 6,
+              transition: "all .15s",
+            }}
+            onMouseEnter={e => { e.target.style.color = T.text; e.target.style.background = T.surfaceHi; }}
+            onMouseLeave={e => { e.target.style.color = T.textDim; e.target.style.background = "transparent"; }}
+          >
+            {label}
+          </a>
+        ))}
       </div>
     </div>
   </nav>
