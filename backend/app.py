@@ -26,6 +26,10 @@ from threading import Thread
 from typing import Optional
 import time
 
+# Base URL for download links — set BASE_URL env var in staging/production.
+# e.g. export BASE_URL=https://api.myapp.com
+BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:5000").rstrip("/")
+
 # In-memory job/progress storage (simple, not persistent)
 PROGRESS = {}  # job_id -> {status, percent, message}
 RESULTS = {}   # job_id -> final result dict
@@ -302,7 +306,7 @@ def mitigate_async():
                 )
                 joblib.dump(wrapper, model_path)
                 res["model_id"] = model_id
-                res["model_download_url"] = f"http://127.0.0.1:5000/download_model/{model_id}"
+                res["model_download_url"] = f"{BASE_URL}/download_model/{model_id}"
 
                 PROGRESS[job_id].update({"percent": 100, "message": "done", "status": "done"})
                 RESULTS[job_id] = res
@@ -382,7 +386,7 @@ def mitigate_user_model_async():
                 )
                 joblib.dump(wrapper, model_path)
                 res["model_id"] = model_id
-                res["model_download_url"] = f"http://127.0.0.1:5000/download_model/{model_id}"
+                res["model_download_url"] = f"{BASE_URL}/download_model/{model_id}"
 
                 PROGRESS[job_id].update({"percent": 100, "message": "done", "status": "done"})
                 RESULTS[job_id] = res
