@@ -249,9 +249,9 @@ def train_baseline_only(df: pd.DataFrame, target_col: str, sensitive_col: str):
 
     # choose classifier based on strategy
     if strategy == "fast-hash-sgd":
-        base_clf = SGDClassifier(loss='log_loss', max_iter=1000, tol=1e-3)
+        base_clf = SGDClassifier(loss='log_loss', max_iter=1000, tol=1e-3, random_state=42)
     else:
-        base_clf = LogisticRegression(max_iter=2000, solver='saga', n_jobs=-1)
+        base_clf = LogisticRegression(max_iter=2000, solver='saga', n_jobs=-1, random_state=42)
 
     X = df.drop(columns=[target_col], errors='ignore')
     X = X.drop(columns=[sensitive_col], errors='ignore')
