@@ -343,7 +343,12 @@ class CatHasher(BaseEstimator, TransformerMixin):
         # Convert each row's categorical columns to a dict
         if hasattr(X, 'loc'):
             df = X
-            dicts = df[self.cols].fillna('MISSING').astype(str).to_dict(orient='records')
+            # dicts = df[self.cols].fillna('MISSING').astype(str).to_dict(orient='records')
+            
+            # Cast to object before fillna so pandas Categorical columns can
+            # accept the placeholder value without category-mismatch errors.
+            safe = df[self.cols].astype(object).fillna('MISSING').astype(str)
+            dicts = safe.to_dict(orient='records')
         else:
             # X may be a 2D numpy array (subset of columns). Convert rows to dicts using self.cols
             arr = np.asarray(X)

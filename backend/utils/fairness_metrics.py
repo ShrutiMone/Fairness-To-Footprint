@@ -101,8 +101,11 @@ def compute_fairness_metrics(df: pd.DataFrame, target_col: str, sensitive_col: s
         y_true_enc = _ensure_binary(y_true_enc)
         y_pred_enc = _ensure_binary(y_pred_enc)
 
-        sensitive_series = pd.Series(sensitive).fillna("MISSING")
+        # sensitive_series = pd.Series(sensitive).fillna("MISSING")
 
+        # Cast to object before fillna to avoid pandas Categorical category errors
+        sensitive_series = pd.Series(sensitive).astype(object).fillna("MISSING")
+        
         # MetricFrame for selection rate, FPR, FNR groupwise
         mf = MetricFrame(
             metrics={

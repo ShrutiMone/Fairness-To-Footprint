@@ -1,0 +1,96 @@
+{
+  "dataset": "fairlearn.datasets.fetch_adult",
+  "rows": 48842,
+  "columns": 15,
+  "target": "income",
+  "sensitive": "sex",
+  "constraint": "equalized_odds",
+  "baseline": {
+    "performance_test": {
+      "Accuracy": 0.8534,
+      "Precision": 0.7186,
+      "Recall": 0.6369,
+      "F1": 0.6753
+    },
+    "fairness_test": {
+      "Demographic Parity Difference": 0.1838,
+      "Equalized Odds Difference": 0.0834,
+      "False Positive Rate Difference": 0.0834,
+      "False Negative Rate Difference": 0.0587
+    }
+  },
+  "mitigated": {
+    "performance_test": {
+      "Accuracy": 0.8381,
+      "Precision": 0.7371,
+      "Recall": 0.5026,
+      "F1": 0.5977
+    },
+    "fairness_test": {
+      "Demographic Parity Difference": 0.0961,
+      "Equalized Odds Difference": 0.0314,
+      "False Positive Rate Difference": 0.0178,
+      "False Negative Rate Difference": 0.0314
+    }
+  },
+  "debug": {
+    "baseline_metrics_test_raw": {
+      "overall": {
+        "Demographic Parity Difference": 0.1838,
+        "Equalized Odds Difference": 0.0834,
+        "False Positive Rate Difference": 0.0834,
+        "False Negative Rate Difference": 0.0587
+      },
+      "by_group": {
+        "Female": {
+          "Selection Rate": 0.0896,
+          "False Positive Rate": 0.0276,
+          "False Negative Rate": 0.4127
+        },
+        "Male": {
+          "Selection Rate": 0.2734,
+          "False Positive Rate": 0.111,
+          "False Negative Rate": 0.3541
+        }
+      }
+    },
+    "mitigated_metrics_test_raw": {
+      "overall": {
+        "Demographic Parity Difference": 0.0961,
+        "Equalized Odds Difference": 0.0314,
+        "False Positive Rate Difference": 0.0178,
+        "False Negative Rate Difference": 0.0314
+      },
+      "by_group": {
+        "Female": {
+          "Selection Rate": 0.0991,
+          "False Positive Rate": 0.0455,
+          "False Negative Rate": 0.4709
+        },
+        "Male": {
+          "Selection Rate": 0.1952,
+          "False Positive Rate": 0.0633,
+          "False Negative Rate": 0.5023
+        }
+      }
+    },
+    "mitigation_result_keys": [
+      "label_encoder",
+      "metrics_after_mitigation",
+      "metrics_after_mitigation_test",
+      "metrics_baseline",
+      "metrics_baseline_test",
+      "mitigator",
+      "num_predictors",
+      "performance_after_mitigation",
+      "performance_after_mitigation_test",
+      "performance_baseline",
+      "performance_baseline_test",
+      "predictions",
+      "strategy",
+      "time_estimate_seconds",
+      "transformer",
+      "weights"
+    ]
+  }
+}
