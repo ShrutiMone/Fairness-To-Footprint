@@ -1,0 +1,17 @@
+{
+  "sensitive": "sex",
+  "constraint": "equalized_odds",
+  "manual_overall": {
+    "Demographic Parity Difference": 0.0998,
+    "Equalized Odds Difference": 0.0345,
+    "False Positive Rate Difference": 0.0164,
+    "False Negative Rate Difference": 0.0345
+  },
+  "fairlearn_overall": {
+    "Demographic Parity Difference": 0.0998,
+    "Equalized Odds Difference": 0.0345,
+    "False Positive Rate Difference": 0.0164,
+    "False Negative Rate Difference": 0.0345
+  },
+  "status": "pass"
+}

@@ -1,0 +1,66 @@
+{
+  "dataset": "fairlearn.datasets.fetch_adult",
+  "rows": 48842,
+  "columns": 15,
+  "target": "income",
+  "sensitive": "sex",
+  "constraint": "demographic_parity",
+  "library": "AIF360",
+  "baseline_strategy": "fast-hash-sgd",
+  "sensitive_mapping": {
+    "Female": 0,
+    "Male": 1
+  },
+  "baseline": {
+    "performance_test": {
+      "Accuracy": 0.8534,
+      "Precision": 0.7186,
+      "Recall": 0.6369,
+      "F1": 0.6753
+    },
+    "fairness_test": {
+      "Demographic Parity Difference": 0.1838,
+      "Equalized Odds Difference": 0.0834,
+      "False Positive Rate Difference": 0.0834,
+      "False Negative Rate Difference": 0.0587
+    },
+    "fairness_test_by_group": {
+      "Female": {
+        "Selection Rate": 0.0896,
+        "False Positive Rate": 0.0276,
+        "False Negative Rate": 0.4127
+      },
+      "Male": {
+        "Selection Rate": 0.2734,
+        "False Positive Rate": 0.111,
+        "False Negative Rate": 0.3541
+      }
+    }
+  },
+  "aif360_mitigated": {
+    "performance_test": {
+      "Accuracy": 0.7774,
+      "Precision": 0.5224,
+      "Recall": 0.8114,
+      "F1": 0.6356
+    },
+    "fairness_test": {
+      "Demographic Parity Difference": 0.0324,
+      "Equalized Odds Difference": 0.1477,
+      "False Positive Rate Difference": 0.0717,
+      "False Negative Rate Difference": 0.1477
+    },
+    "fairness_test_by_group": {
+      "Female": {
+        "Selection Rate": 0.3501,
+        "False Positive Rate": 0.2771,
+        "False Negative Rate": 0.0637
+      },
+      "Male": {
+        "Selection Rate": 0.3825,
+        "False Positive Rate": 0.2054,
+        "False Negative Rate": 0.2114
+      }
+    }
+  }
+}

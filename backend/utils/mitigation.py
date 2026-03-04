@@ -546,7 +546,8 @@ def mitigate_with_exponentiated_gradient(df: pd.DataFrame, target_col: str, sens
         "transformer": transformer,
         "label_encoder": le,
         "strategy": strategy,
-        "time_estimate_seconds": time_estimate
+        "time_estimate_seconds": time_estimate,
+        "predictions_mitigated_test": y_pred_mitigated_test.tolist() if X_test is not None and len(X_test) > 0 else None
     }
 
 
